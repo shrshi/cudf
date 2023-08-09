@@ -15,6 +15,7 @@ the details of CUDA programming.
 
    user_guide/index
    api_docs/index
+   libcudf_docs/index
    developer_guide/index
 
 
