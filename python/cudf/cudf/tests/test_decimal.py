@@ -101,7 +101,7 @@ def test_typecast_from_float_to_decimal(data, from_dtype, to_dtype):
 
     got = got.astype(to_dtype)
 
-    assert_eq(new_got, expected)
+    assert_eq(got, expected)
 
 
 @pytest.mark.parametrize(
