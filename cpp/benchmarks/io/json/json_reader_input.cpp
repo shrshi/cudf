@@ -54,6 +54,7 @@ void json_read_common(cudf::io::source_info const& source,
     });
 
   auto const time = state.get_summary("nv/cold/time/gpu/mean").get_float64("value");
+  state.add_element_count(time, "read_json_time (ms)");
   state.add_element_count(static_cast<double>(data_size) / time, "bytes_per_second");
   state.add_buffer_size(
     mem_stats_logger.peak_memory_usage(), "peak_memory_usage", "peak_memory_usage");
@@ -103,6 +104,9 @@ void BM_json_read_compressed_io(nvbench::state& state,
 {
   size_t const data_size   = state.get_int64("data_size");
   size_t const num_sources = state.get_int64("num_sources");
+  size_t const num_threads = state.get_int64("num_threads");
+  setenv("LIBCUDF_HOST_COMPRESSION_NUM_THREADS", std::to_string(num_threads).c_str(), 1);
+
 
   auto const d_type = get_type_or_group({static_cast<int32_t>(data_type::INTEGRAL),
                                          static_cast<int32_t>(data_type::FLOAT),
@@ -128,6 +132,8 @@ void BM_json_read_compressed_io(nvbench::state& state,
                    state,
                    comptype,
                    data_size * num_sources);
+
+  unsetenv("LIBCUDF_HOST_COMPRESSION_NUM_THREADS");
 }
 
 template <data_type DataType, io_type IO>
@@ -173,4 +179,5 @@ NVBENCH_BENCH_TYPES(BM_json_read_compressed_io, NVBENCH_TYPE_AXES(compression_li
   .set_type_axes_names({"compression_type"})
   .add_int64_power_of_two_axis("data_size", nvbench::range(20, 29, 1))
   .add_int64_axis("num_sources", nvbench::range(1, 5, 1))
+  .add_int64_power_of_two_axis("num_threads", nvbench::range(0, 5, 1))
   .set_min_samples(4);

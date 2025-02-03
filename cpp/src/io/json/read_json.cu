@@ -44,19 +44,68 @@
 #include <BS_thread_pool_utils.hpp>
 
 #include <numeric>
+#include <chrono>
 
 namespace cudf::io::json::detail {
 
 namespace {
+
+namespace mytimer {
+class Timer {
+ private:
+  std::chrono::time_point<std::chrono::high_resolution_clock> startTime;
+  std::chrono::duration<double, std::milli> elapsedTime;
+  bool running;
+
+ public:
+  Timer() : running(false), elapsedTime(0) {}
+
+  void start() {
+      if (!running) {
+          startTime = std::chrono::high_resolution_clock::now();
+          running = true;
+      }
+  }
+
+  void stop() {
+      if (running) {
+          elapsedTime += std::chrono::high_resolution_clock::now() - startTime;
+          running = false;
+      }
+  }
+
+  double elapsedMilliseconds() {
+      if (running) {
+          return (elapsedTime + std::chrono::high_resolution_clock::now() - startTime).count();
+      } else {
+          return elapsedTime.count();
+      }
+  }
+
+  /*
+  double elapsedSeconds() {
+      return elapsedMilliseconds() / 1000.0;
+  }
+  */
+};
+} //namespace mytimer
 
 namespace pools {
 
 BS::thread_pool& tpool()
 {
   static std::size_t pool_size =
-    getenv_or("LIBCUDF_HOST_COMPRESSION_NUM_THREADS", std::thread::hardware_concurrency());
+    static_cast<std::size_t>(getenv_or<std::size_t>("LIBCUDF_HOST_COMPRESSION_NUM_THREADS", std::thread::hardware_concurrency()));
   static BS::thread_pool _tpool(pool_size);
   return _tpool;
+}
+
+std::vector<std::size_t>& per_thread_decompression_time() 
+{
+  std::size_t pool_size_ =
+    static_cast<std::size_t>(getenv_or<std::size_t>("LIBCUDF_HOST_COMPRESSION_NUM_THREADS", std::thread::hardware_concurrency()));
+  static std::vector<std::size_t> per_thread_decomp_time(pool_size_);
+  return per_thread_decomp_time;
 }
 
 }  // namespace pools
@@ -120,8 +169,13 @@ class compressed_host_buffer_source final : public datasource {
                                         rmm::cuda_stream_view stream) override
   {
     auto& thread_pool = pools::tpool();
-    return thread_pool.submit_task([this, offset, size, dst, stream] {
+    auto& host_decompression_time = pools::per_thread_decompression_time();
+    return thread_pool.submit_task([this, offset, size, dst, &host_decompression_time, stream] {
+      auto startTime = std::chrono::high_resolution_clock::now();
       auto hbuf = host_read(offset, size);
+      std::chrono::duration<double, std::milli> elapsedTime = std::chrono::high_resolution_clock::now() - startTime;
+      auto tid = BS::this_thread::get_index().value();
+      host_decompression_time[tid] += elapsedTime.count();
       CUDF_CUDA_TRY(
         cudaMemcpyAsync(dst, hbuf->data(), hbuf->size(), cudaMemcpyHostToDevice, stream.value()));
       stream.synchronize();
@@ -165,23 +219,26 @@ std::size_t estimate_size_per_subchunk(std::size_t chunk_size)
 }
 
 /**
- * @brief Return the upper bound on the batch size for the JSON reader.
+ * @brief Return the batch size for the JSON reader.
  *
- * The datasources passed to the JSON reader are split into batches demarcated by byte range
- * offsets and read iteratively. The batch size is capped at INT_MAX bytes, which is the
- * default value returned by the function. This value can be overridden at runtime using the
- * environment variable LIBCUDF_JSON_BATCH_SIZE
+ * The datasources passed to the JSON reader are read iteratively in batches demarcated by byte
+ * range offsets. The tokenizer requires the JSON buffer read in each batch to be of size at most
+ * INT_MAX bytes. Since the byte range corresponding to a given batch can cause the last JSON line
+ * in the batch to be incomplete, the batch size returned by this function allows for an additional
+ * `max_subchunks_prealloced` subchunks to be allocated beyond the byte range offsets. Since the
+ * size of the subchunk depends on the size of the byte range, the batch size is variable and cannot
+ * be directly controlled by the user. As a workaround, the environment variable
+ * LIBCUDF_JSON_BATCH_SIZE can be used to set a fixed batch size at runtime.
  *
  * @return size in bytes
  */
-std::size_t get_batch_size_upper_bound()
+std::size_t get_batch_size(std::size_t chunk_size)
 {
-  auto const batch_size_str         = std::getenv("LIBCUDF_JSON_BATCH_SIZE");
-  int64_t const batch_size          = batch_size_str != nullptr ? std::atol(batch_size_str) : 0L;
-  auto const batch_limit            = static_cast<int64_t>(std::numeric_limits<int32_t>::max());
-  auto const batch_size_upper_bound = static_cast<std::size_t>(
-    (batch_size > 0 && batch_size < batch_limit) ? batch_size : batch_limit);
-  return batch_size_upper_bound;
+  std::size_t const size_per_subchunk = estimate_size_per_subchunk(chunk_size);
+  auto const batch_limit = static_cast<std::size_t>(std::numeric_limits<int32_t>::max()) -
+                           (max_subchunks_prealloced * size_per_subchunk);
+  return std::min<std::size_t>(batch_limit,
+                               getenv_or<std::size_t>("LIBCUDF_JSON_BATCH_SIZE", batch_limit));
 }
 
 /**
@@ -295,6 +352,10 @@ datasource::owning_buffer<rmm::device_buffer> get_record_range_raw_input(
       }
     }
 
+    auto const batch_limit = static_cast<uint64_t>(std::numeric_limits<int32_t>::max());
+    CUDF_EXPECTS(static_cast<size_t>(next_delim_pos - first_delim_pos - shift_for_nonzero_offset) <
+                   batch_limit,
+                 "The size of the JSON buffer returned by every batch cannot exceed INT_MAX bytes");
     return datasource::owning_buffer<rmm::device_buffer>(
       std::move(buffer),
       reinterpret_cast<uint8_t*>(buffer.data()) + first_delim_pos + shift_for_nonzero_offset,
@@ -333,6 +394,7 @@ table_with_metadata read_batch(host_span<std::unique_ptr<datasource>> sources,
   datasource::owning_buffer<rmm::device_buffer> bufview =
     get_record_range_raw_input(sources, reader_opts, stream);
 
+
   // If input JSON buffer has single quotes and option to normalize single quotes is enabled,
   // invoke pre-processing FST
   if (reader_opts.is_enabled_normalize_single_quotes()) {
@@ -343,6 +405,7 @@ table_with_metadata read_batch(host_span<std::unique_ptr<datasource>> sources,
   auto buffer =
     cudf::device_span<char const>(reinterpret_cast<char const*>(bufview.data()), bufview.size());
   stream.synchronize();
+  std::cout << "Now the parsing begins\n";
   return device_parse_nested_json(buffer, reader_opts, stream, mr);
 }
 
@@ -365,17 +428,11 @@ table_with_metadata read_json_impl(host_span<std::unique_ptr<datasource>> source
     reader_opts.is_enabled_lines() || total_source_size < std::numeric_limits<int32_t>::max(),
     "Parsing Regular JSON inputs of size greater than INT_MAX bytes is not supported");
 
-  std::size_t chunk_offset = reader_opts.get_byte_range_offset();
-  std::size_t chunk_size   = reader_opts.get_byte_range_size();
-  chunk_size               = !chunk_size ? total_source_size - chunk_offset
-                                         : std::min(chunk_size, total_source_size - chunk_offset);
-
-  std::size_t const size_per_subchunk      = estimate_size_per_subchunk(chunk_size);
-  std::size_t const batch_size_upper_bound = get_batch_size_upper_bound();
-  std::size_t const batch_size =
-    batch_size_upper_bound < (max_subchunks_prealloced * size_per_subchunk)
-      ? batch_size_upper_bound
-      : batch_size_upper_bound - (max_subchunks_prealloced * size_per_subchunk);
+  std::size_t chunk_offset     = reader_opts.get_byte_range_offset();
+  std::size_t chunk_size       = reader_opts.get_byte_range_size();
+  chunk_size                   = !chunk_size ? total_source_size - chunk_offset
+                                             : std::min(chunk_size, total_source_size - chunk_offset);
+  std::size_t const batch_size = get_batch_size(chunk_size);
 
   /*
    * Identify the position (zero-indexed) of starting source file from which to begin
@@ -415,6 +472,12 @@ table_with_metadata read_json_impl(host_span<std::unique_ptr<datasource>> source
     }
     i++;
   }
+  std::printf("=================================================\n");
+  std::printf("============== Input statistics =================\n");
+  std::printf("Number of sources = %lu\n", sources.size());
+  std::printf("Batch size = %lu\n", batch_size);
+  std::printf("Number of batches = %lu\n", batch_offsets.size() - 1);
+  std::printf("=================================================\n");
   /*
    * If there is a single batch, then we can directly return the table without the
    * unnecessary concatenate. The size of batch_offsets is 1 if all sources are empty,
@@ -490,11 +553,21 @@ table_with_metadata read_json_impl(host_span<std::unique_ptr<datasource>> source
   // Dispatch individual batches to read_batch and push the resulting table into
   // partial_tables array. Note that the reader options need to be updated for each
   // batch to adjust byte range offset and byte range size.
-  for (std::size_t i = 1; i < batch_offsets.size() - 1; i++) {
-    batched_reader_opts.set_byte_range_offset(batch_offsets[i]);
-    batched_reader_opts.set_byte_range_size(batch_offsets[i + 1] - batch_offsets[i]);
+  std::size_t batch_offset_pos = 1;
+  for (; batch_offset_pos < batch_offsets.size() - 2; batch_offset_pos++) {
+    batched_reader_opts.set_byte_range_offset(batch_offsets[batch_offset_pos]);
+    batched_reader_opts.set_byte_range_size(batch_offsets[batch_offset_pos + 1] -
+                                            batch_offsets[batch_offset_pos]);
     partial_tables.emplace_back(
       read_batch(sources, batched_reader_opts, stream, cudf::get_current_device_resource_ref()));
+  }
+  batched_reader_opts.set_byte_range_offset(batch_offsets[batch_offset_pos]);
+  batched_reader_opts.set_byte_range_size(batch_offsets[batch_offset_pos + 1] -
+                                          batch_offsets[batch_offset_pos]);
+  auto partial_table =
+    read_batch(sources, batched_reader_opts, stream, cudf::get_current_device_resource_ref());
+  if (partial_table.tbl->num_columns() != 0 && partial_table.tbl->num_rows() != 0) {
+    partial_tables.emplace_back(std::move(partial_table));
   }
 
   auto expects_schema_equality =
@@ -552,6 +625,10 @@ device_span<char> ingest_raw_input(device_span<char> buffer,
                            cudf::detail::global_cuda_stream_pool().get_stream_pool_size(),
                            pools::tpool().get_thread_count()});
   auto stream_pool = cudf::detail::fork_streams(stream, num_streams);
+  mytimer::Timer timer;
+  auto &host_decompression_time = pools::per_thread_decompression_time();
+  std::fill(host_decompression_time.begin(), host_decompression_time.end(), 0);
+  timer.start();
   for (std::size_t i = start_source, cur_stream = 0;
        i < sources.size() && bytes_read < total_bytes_to_read;
        i++) {
@@ -598,6 +675,14 @@ device_span<char> ingest_raw_input(device_span<char> buffer,
       });
     CUDF_EXPECTS(bytes_read == total_bytes_to_read, "something's fishy");
   }
+  timer.stop();
+
+  std::cout << "===== INGESTION ====\n";
+  std::cout << "Elapsed time: " << timer.elapsedMilliseconds() << " ms\n";
+  std::cout << "Per-thread host decompression time (ms) = ";
+  for(auto t : host_decompression_time)
+    std::cout << t << " ";
+  std::cout << "\n====================\n";
 
   return buffer.first(bytes_read + (delimiter_map.size() * num_delimiter_chars));
 }
@@ -609,6 +694,13 @@ table_with_metadata read_json(host_span<std::unique_ptr<datasource>> sources,
 {
   CUDF_FUNC_RANGE();
 
+  std::size_t const pool_size =
+    static_cast<std::size_t>(getenv_or<std::size_t>("LIBCUDF_HOST_COMPRESSION_NUM_THREADS", std::thread::hardware_concurrency()));
+  pools::tpool().reset(pool_size);
+  pools::per_thread_decompression_time().resize(pool_size);
+
+  mytimer::Timer timer;
+  timer.start();
   if (reader_opts.get_byte_range_offset() != 0 or reader_opts.get_byte_range_size() != 0) {
     CUDF_EXPECTS(reader_opts.is_enabled_lines(),
                  "Specifying a byte range is supported only for JSON Lines");
@@ -636,6 +728,8 @@ table_with_metadata read_json(host_span<std::unique_ptr<datasource>> sources,
                  [](auto& task) { return task.get(); });
   // in read_json_impl, we need the compressed source size to actually be the
   // uncompressed source size for correct batching
+  timer.stop();
+  std::cout << "Compressed datasource contruction time = " << timer.elapsedMilliseconds() << " s\n";
   return read_json_impl(compressed_sources, reader_opts, stream, mr);
 }
 
