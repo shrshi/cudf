@@ -61,30 +61,30 @@ class Timer {
   Timer() : running(false), elapsedTime(0) {}
 
   void start() {
-      if (!running) {
-          startTime = std::chrono::high_resolution_clock::now();
-          running = true;
-      }
+    if (!running) {
+        startTime = std::chrono::high_resolution_clock::now();
+        running = true;
+    }
   }
 
   void stop() {
-      if (running) {
-          elapsedTime += std::chrono::high_resolution_clock::now() - startTime;
-          running = false;
-      }
+    if (running) {
+        elapsedTime += std::chrono::high_resolution_clock::now() - startTime;
+        running = false;
+    }
   }
 
   double elapsedMilliseconds() {
-      if (running) {
-          return (elapsedTime + std::chrono::high_resolution_clock::now() - startTime).count();
-      } else {
-          return elapsedTime.count();
-      }
+    if (running) {
+        return (elapsedTime + std::chrono::high_resolution_clock::now() - startTime).count();
+    } else {
+        return elapsedTime.count();
+    }
   }
 
   /*
   double elapsedSeconds() {
-      return elapsedMilliseconds() / 1000.0;
+    return elapsedMilliseconds() / 1000.0;
   }
   */
 };
@@ -402,11 +402,18 @@ table_with_metadata read_batch(host_span<std::unique_ptr<datasource>> sources,
       bufview, reader_opts.get_delimiter(), stream, cudf::get_current_device_resource_ref());
   }
 
+  /*
   auto buffer =
     cudf::device_span<char const>(reinterpret_cast<char const*>(bufview.data()), bufview.size());
+  */
   stream.synchronize();
   std::cout << "Now the parsing begins\n";
-  return device_parse_nested_json(buffer, reader_opts, stream, mr);
+
+  std::string simple_buffer = R"({"a": "b"}
+  )";
+  auto d_simple_buffer = cudf::detail::make_device_uvector_async(cudf::host_span<char const>(simple_buffer.data(), simple_buffer.size()), stream, cudf::get_current_device_resource_ref());
+  return device_parse_nested_json(d_simple_buffer, reader_opts, stream, mr);
+
 }
 
 table_with_metadata read_json_impl(host_span<std::unique_ptr<datasource>> sources,
@@ -680,8 +687,11 @@ device_span<char> ingest_raw_input(device_span<char> buffer,
   std::cout << "===== INGESTION ====\n";
   std::cout << "Elapsed time: " << timer.elapsedMilliseconds() << " ms\n";
   std::cout << "Per-thread host decompression time (ms) = ";
+  /*
   for(auto t : host_decompression_time)
     std::cout << t << " ";
+  */
+  std::cout << *std::max_element(host_decompression_time.begin(), host_decompression_time.end());
   std::cout << "\n====================\n";
 
   return buffer.first(bytes_read + (delimiter_map.size() * num_delimiter_chars));
