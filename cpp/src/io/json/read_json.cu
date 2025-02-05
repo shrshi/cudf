@@ -41,54 +41,12 @@
 #include <thrust/scatter.h>
 
 #include <BS_thread_pool.hpp>
-#include <BS_thread_pool_utils.hpp>
 
 #include <numeric>
-#include <chrono>
 
 namespace cudf::io::json::detail {
 
 namespace {
-
-namespace mytimer {
-class Timer {
- private:
-  std::chrono::time_point<std::chrono::high_resolution_clock> startTime;
-  std::chrono::duration<double, std::milli> elapsedTime;
-  bool running;
-
- public:
-  Timer() : running(false), elapsedTime(0) {}
-
-  void start() {
-    if (!running) {
-        startTime = std::chrono::high_resolution_clock::now();
-        running = true;
-    }
-  }
-
-  void stop() {
-    if (running) {
-        elapsedTime += std::chrono::high_resolution_clock::now() - startTime;
-        running = false;
-    }
-  }
-
-  double elapsedMilliseconds() {
-    if (running) {
-        return (elapsedTime + std::chrono::high_resolution_clock::now() - startTime).count();
-    } else {
-        return elapsedTime.count();
-    }
-  }
-
-  /*
-  double elapsedSeconds() {
-    return elapsedMilliseconds() / 1000.0;
-  }
-  */
-};
-} //namespace mytimer
 
 namespace pools {
 
@@ -98,14 +56,6 @@ BS::thread_pool& tpool()
     static_cast<std::size_t>(getenv_or<std::size_t>("LIBCUDF_HOST_COMPRESSION_NUM_THREADS", std::thread::hardware_concurrency()));
   static BS::thread_pool _tpool(pool_size);
   return _tpool;
-}
-
-std::vector<std::size_t>& per_thread_decompression_time() 
-{
-  std::size_t pool_size_ =
-    static_cast<std::size_t>(getenv_or<std::size_t>("LIBCUDF_HOST_COMPRESSION_NUM_THREADS", std::thread::hardware_concurrency()));
-  static std::vector<std::size_t> per_thread_decomp_time(pool_size_);
-  return per_thread_decomp_time;
 }
 
 }  // namespace pools
@@ -169,13 +119,8 @@ class compressed_host_buffer_source final : public datasource {
                                         rmm::cuda_stream_view stream) override
   {
     auto& thread_pool = pools::tpool();
-    auto& host_decompression_time = pools::per_thread_decompression_time();
-    return thread_pool.submit_task([this, offset, size, dst, &host_decompression_time, stream] {
-      auto startTime = std::chrono::high_resolution_clock::now();
+    return thread_pool.submit_task([this, offset, size, dst, stream] {
       auto hbuf = host_read(offset, size);
-      std::chrono::duration<double, std::milli> elapsedTime = std::chrono::high_resolution_clock::now() - startTime;
-      auto tid = BS::this_thread::get_index().value();
-      host_decompression_time[tid] += elapsedTime.count();
       CUDF_CUDA_TRY(
         cudaMemcpyAsync(dst, hbuf->data(), hbuf->size(), cudaMemcpyHostToDevice, stream.value()));
       stream.synchronize();
@@ -402,18 +347,11 @@ table_with_metadata read_batch(host_span<std::unique_ptr<datasource>> sources,
       bufview, reader_opts.get_delimiter(), stream, cudf::get_current_device_resource_ref());
   }
 
-  /*
   auto buffer =
     cudf::device_span<char const>(reinterpret_cast<char const*>(bufview.data()), bufview.size());
-  */
   stream.synchronize();
-  std::cout << "Now the parsing begins\n";
 
-  std::string simple_buffer = R"({"a": "b"}
-  )";
-  auto d_simple_buffer = cudf::detail::make_device_uvector_async(cudf::host_span<char const>(simple_buffer.data(), simple_buffer.size()), stream, cudf::get_current_device_resource_ref());
-  return device_parse_nested_json(d_simple_buffer, reader_opts, stream, mr);
-
+  return device_parse_nested_json(buffer, reader_opts, stream, mr);
 }
 
 table_with_metadata read_json_impl(host_span<std::unique_ptr<datasource>> sources,
@@ -632,10 +570,6 @@ device_span<char> ingest_raw_input(device_span<char> buffer,
                            cudf::detail::global_cuda_stream_pool().get_stream_pool_size(),
                            pools::tpool().get_thread_count()});
   auto stream_pool = cudf::detail::fork_streams(stream, num_streams);
-  mytimer::Timer timer;
-  auto &host_decompression_time = pools::per_thread_decompression_time();
-  std::fill(host_decompression_time.begin(), host_decompression_time.end(), 0);
-  timer.start();
   for (std::size_t i = start_source, cur_stream = 0;
        i < sources.size() && bytes_read < total_bytes_to_read;
        i++) {
@@ -682,17 +616,6 @@ device_span<char> ingest_raw_input(device_span<char> buffer,
       });
     CUDF_EXPECTS(bytes_read == total_bytes_to_read, "something's fishy");
   }
-  timer.stop();
-
-  std::cout << "===== INGESTION ====\n";
-  std::cout << "Elapsed time: " << timer.elapsedMilliseconds() << " ms\n";
-  std::cout << "Per-thread host decompression time (ms) = ";
-  /*
-  for(auto t : host_decompression_time)
-    std::cout << t << " ";
-  */
-  std::cout << *std::max_element(host_decompression_time.begin(), host_decompression_time.end());
-  std::cout << "\n====================\n";
 
   return buffer.first(bytes_read + (delimiter_map.size() * num_delimiter_chars));
 }
@@ -707,10 +630,7 @@ table_with_metadata read_json(host_span<std::unique_ptr<datasource>> sources,
   std::size_t const pool_size =
     static_cast<std::size_t>(getenv_or<std::size_t>("LIBCUDF_HOST_COMPRESSION_NUM_THREADS", std::thread::hardware_concurrency()));
   pools::tpool().reset(pool_size);
-  pools::per_thread_decompression_time().resize(pool_size);
 
-  mytimer::Timer timer;
-  timer.start();
   if (reader_opts.get_byte_range_offset() != 0 or reader_opts.get_byte_range_size() != 0) {
     CUDF_EXPECTS(reader_opts.is_enabled_lines(),
                  "Specifying a byte range is supported only for JSON Lines");
@@ -738,8 +658,6 @@ table_with_metadata read_json(host_span<std::unique_ptr<datasource>> sources,
                  [](auto& task) { return task.get(); });
   // in read_json_impl, we need the compressed source size to actually be the
   // uncompressed source size for correct batching
-  timer.stop();
-  std::cout << "Compressed datasource contruction time = " << timer.elapsedMilliseconds() << " s\n";
   return read_json_impl(compressed_sources, reader_opts, stream, mr);
 }
 
