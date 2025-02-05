@@ -416,12 +416,16 @@ table_with_metadata read_json_impl(host_span<std::unique_ptr<datasource>> source
     }
     i++;
   }
-  std::printf("=================================================\n");
-  std::printf("============== Input statistics =================\n");
-  std::printf("Number of sources = %lu\n", sources.size());
+
+  std::size_t total_uncompressed_size = 0;
+  for(auto &src : sources) {
+    total_uncompressed_size += src->size();
+  }
+  std::printf("Total uncompressed sources size = %lu\n", total_uncompressed_size);
   std::printf("Batch size = %lu\n", batch_size);
   std::printf("Number of batches = %lu\n", batch_offsets.size() - 1);
   std::printf("=================================================\n");
+
   /*
    * If there is a single batch, then we can directly return the table without the
    * unnecessary concatenate. The size of batch_offsets is 1 if all sources are empty,
@@ -566,6 +570,7 @@ device_span<char> ingest_raw_input(device_span<char> buffer,
     std::min<std::size_t>({sources.size() - start_source + 1,
                            cudf::detail::global_cuda_stream_pool().get_stream_pool_size(),
                            pools::tpool().get_thread_count()});
+  std::cout << "num_streams = " << num_streams << std::endl;
   auto stream_pool = cudf::detail::fork_streams(stream, num_streams);
   for (std::size_t i = start_source, cur_stream = 0;
        i < sources.size() && bytes_read < total_bytes_to_read;
@@ -636,6 +641,16 @@ table_with_metadata read_json(host_span<std::unique_ptr<datasource>> sources,
   if (sources.size() > 1) {
     CUDF_EXPECTS(reader_opts.is_enabled_lines(),
                  "Multiple inputs are supported only for JSON Lines format");
+  }
+
+  std::printf("=================================================\n");
+  std::printf("============== Input statistics =================\n");
+  std::printf("Number of sources = %lu\n", sources.size());
+  if(reader_opts.get_compression() == cudf::io::compression_type::GZIP) {
+    std::size_t total_compressed_size = 0;
+    for(auto &src : sources)
+      total_compressed_size += src->size();
+    std::printf("Total compressed sources size = %lu\n", total_compressed_size);
   }
 
   if (reader_opts.get_compression() == compression_type::NONE)

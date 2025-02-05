@@ -17,6 +17,10 @@ DartConfiguration.tcl
 .nfs*
 .clangd
 compile_commands.json
+*.nsys-rep
+*.sqlite
+*.out
+normprint
 
 ## Python build directories & artifacts
 dask-worker-space/

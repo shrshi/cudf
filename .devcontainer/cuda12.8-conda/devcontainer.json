@@ -38,7 +38,9 @@
       "installnvJPEG": false,
       "pruneStaticLibs": true
     },
-    "ghcr.io/rapidsai/devcontainers/features/rapids-build-utils:25.4": {}
+    "ghcr.io/rapidsai/devcontainers/features/rapids-build-utils:25.4": {},
+    "../features/local/utils": {},
+    "../features/local/dotfiles": {}
   },
   "overrideFeatureInstallOrder": [
     "ghcr.io/rapidsai/devcontainers/features/cuda",
@@ -61,7 +63,14 @@
     "source=${localWorkspaceFolder}/../.cache,target=/home/coder/.cache,type=bind,consistency=consistent",
     "source=${localWorkspaceFolder}/../.config,target=/home/coder/.config,type=bind,consistency=consistent",
     "source=${localWorkspaceFolder}/../.conda/pkgs,target=/home/coder/.conda/pkgs,type=bind,consistency=consistent",
-    "source=${localWorkspaceFolder}/../.conda/${localWorkspaceFolderBasename}-cuda12.8-envs,target=/home/coder/.conda/envs,type=bind,consistency=consistent"
+    "source=${localWorkspaceFolder}/../.conda/${localWorkspaceFolderBasename}-cuda12.8-envs,target=/home/coder/.conda/envs,type=bind,consistency=consistent",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/coder/.ssh,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/nvim/init.lua,target=/home/coder/.config/nvim/init.lua,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/nvim/lua,target=/home/coder/.config/nvim/lua,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.tmux.conf,target=/home/coder/.tmux.conf,type=bind",
+    "source=/datasets/praateekm/cudf_json_input_too_large_error,target=/home/coder/datasets/cudf_json_input_too_large_error,type=bind",
+    "source=/datasets/praateekm/cudf_json_buggy_schema,target=/home/coder/datasets/cudf_json_buggy_schema,type=bind",
+    "source=/datasets/adattagupta/rpv2_gzip_tests,target=/home/coder/datasets/rpv2_gzip_tests,type=bind"
   ],
   "customizations": {
     "vscode": {
