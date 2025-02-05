@@ -336,7 +336,7 @@ ConfigureTest(
   PERCENT 30 EXTRA_LIBS ${ARROW_LIBRARIES}
 )
 ConfigureTest(
-  JSON_DEBUG_TEST io/json/json_debug_test.cpp 
+  JSON_DEBUG_TEST io/json/json_debug_test.cpp
   GPUS 1
   PERCENT 30 EXTRA_LIBS ${ARROW_LIBRARIES}
 )

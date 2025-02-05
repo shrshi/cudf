@@ -107,7 +107,6 @@ void BM_json_read_compressed_io(nvbench::state& state,
   size_t const num_threads = state.get_int64("num_threads");
   setenv("LIBCUDF_HOST_COMPRESSION_NUM_THREADS", std::to_string(num_threads).c_str(), 1);
 
-
   auto const d_type = get_type_or_group({static_cast<int32_t>(data_type::INTEGRAL),
                                          static_cast<int32_t>(data_type::FLOAT),
                                          static_cast<int32_t>(data_type::DECIMAL),

@@ -52,8 +52,8 @@ namespace pools {
 
 BS::thread_pool& tpool()
 {
-  static std::size_t pool_size =
-    static_cast<std::size_t>(getenv_or<std::size_t>("LIBCUDF_HOST_COMPRESSION_NUM_THREADS", std::thread::hardware_concurrency()));
+  static std::size_t pool_size = static_cast<std::size_t>(getenv_or<std::size_t>(
+    "LIBCUDF_HOST_COMPRESSION_NUM_THREADS", std::thread::hardware_concurrency()));
   static BS::thread_pool _tpool(pool_size);
   return _tpool;
 }
@@ -338,7 +338,6 @@ table_with_metadata read_batch(host_span<std::unique_ptr<datasource>> sources,
   CUDF_FUNC_RANGE();
   datasource::owning_buffer<rmm::device_buffer> bufview =
     get_record_range_raw_input(sources, reader_opts, stream);
-
 
   // If input JSON buffer has single quotes and option to normalize single quotes is enabled,
   // invoke pre-processing FST
@@ -627,8 +626,8 @@ table_with_metadata read_json(host_span<std::unique_ptr<datasource>> sources,
 {
   CUDF_FUNC_RANGE();
 
-  std::size_t const pool_size =
-    static_cast<std::size_t>(getenv_or<std::size_t>("LIBCUDF_HOST_COMPRESSION_NUM_THREADS", std::thread::hardware_concurrency()));
+  std::size_t const pool_size = static_cast<std::size_t>(getenv_or<std::size_t>(
+    "LIBCUDF_HOST_COMPRESSION_NUM_THREADS", std::thread::hardware_concurrency()));
   pools::tpool().reset(pool_size);
 
   if (reader_opts.get_byte_range_offset() != 0 or reader_opts.get_byte_range_size() != 0) {
