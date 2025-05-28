@@ -280,11 +280,12 @@ std::unique_ptr<column> superimpose_nulls(bitmask_type const* null_mask,
                "Child columns must have the same number of rows as the Struct column.");
 
   for (auto& child : content.children) {
-    child = superimpose_nulls_no_sanitize(static_cast<bitmask_type const*>(content.null_mask->data()),
-                                          new_null_count,
-                                          std::move(child),
-                                          stream,
-                                          mr);
+    child =
+      superimpose_nulls_no_sanitize(static_cast<bitmask_type const*>(content.null_mask->data()),
+                                    new_null_count,
+                                    std::move(child),
+                                    stream,
+                                    mr);
   }
   return std::make_unique<column>(cudf::data_type{type_id::STRUCT},
                                   num_rows,
