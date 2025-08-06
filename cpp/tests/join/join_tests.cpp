@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+#include "cuda/__functional/proclaim_return_type.h"
+#include "cudf/column/column_factories.hpp"
+#include "cudf/strings/convert/convert_integers.hpp"
+#include "cudf/utilities/type_dispatcher.hpp"
+
 #include <cudf_test/base_fixture.hpp>
 #include <cudf_test/column_utilities.hpp>
 #include <cudf_test/column_wrapper.hpp>
@@ -39,6 +44,7 @@
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
+#include <rmm/exec_policy.hpp>
 
 #include <limits>
 
@@ -1069,6 +1075,151 @@ TEST_P(JoinParameterizedTest, InnerJoinNoNulls)
       CUDF_TEST_EXPECT_TABLES_EQUIVALENT(*sorted_gold, *sorted_result);
     }
   }
+}
+
+TEST_F(JoinTest, DebugInnerJoinNoNulls)
+{
+  auto col0_0_elements =
+    cudf::detail::make_counting_transform_iterator(0, [](auto i) { return i / 100; });
+  auto col1_0_elements =
+    cudf::detail::make_counting_transform_iterator(0, [](auto i) { return i % 100; });
+  auto validity = cudf::detail::make_counting_transform_iterator(0, [](auto i) { return 1; });
+
+  column_wrapper<int32_t> col0_0(col0_0_elements, col0_0_elements + 200, validity);
+  column_wrapper<int32_t> col1_0(col1_0_elements, col1_0_elements + 2000, validity);
+
+  auto int_col0_0 = col0_0.release();
+  auto int_col1_0 = col1_0.release();
+  auto str_col0_0 = cudf::strings::from_integers(int_col0_0->view());
+  auto str_col1_0 = cudf::strings::from_integers(int_col1_0->view());
+
+  CVector cols0, cols1;
+  cols0.push_back(std::move(str_col0_0));
+  cols1.push_back(std::move(str_col1_0));
+
+  Table t0(std::move(cols0));
+  Table t1(std::move(cols1));
+
+  for (const auto eq : {cudf::null_equality::EQUAL, cudf::null_equality::UNEQUAL}) {
+    // single column
+    {
+      auto result            = inner_join(t0, t1, {0}, {0}, eq, algorithm::SORT_MERGE);
+      auto result_sort_order = cudf::sorted_order(result->view());
+      auto sorted_result     = cudf::gather(result->view(), *result_sort_order);
+
+      // Create gold table with expected output
+      // We expect matches between "0" and "0", "1" and "1", etc. for all values from 0 to 1
+      // Left side has values [0,0,...,1,1,...] (i/100 for i=0 to 199)
+      // Right side has values [0,1,2,...,99,0,1,...] (i%100 for i=0 to 1999)
+      // Each value on the left will match with ~20 values on the right (e.g. "0" matches with index
+      // 0, 100, 200, ...)
+
+      // Create vectors to hold expected result data
+      std::vector<std::string>
+        left_str_col;  // String values from left table (string representation of integers)
+      std::vector<std::string> right_str_col;  // String values from right table
+
+      // Build expected result by analyzing the join operation
+      for (int i = 0; i < 2; i++) {       // For each value in left side (0 and 1)
+        for (int j = 0; j < 2000; j++) {  // Each matches 20 times in right side
+          left_str_col.push_back(std::to_string(i));
+          right_str_col.push_back(std::to_string(i));
+        }
+      }
+
+      // Create the column wrappers for the gold table
+      strcol_wrapper col_gold_0(left_str_col.begin(), left_str_col.end());
+      strcol_wrapper col_gold_1(right_str_col.begin(), right_str_col.end());
+
+      // Build gold table
+      CVector cols_gold;
+      cols_gold.push_back(col_gold_0.release());
+      cols_gold.push_back(col_gold_1.release());
+      Table gold(std::move(cols_gold));
+
+      auto gold_sort_order = cudf::sorted_order(gold.view());
+      auto sorted_gold     = cudf::gather(gold.view(), *gold_sort_order);
+      CUDF_TEST_EXPECT_TABLES_EQUIVALENT(*sorted_gold, *sorted_result);
+    }
+  }
+}
+
+TEST_F(JoinTest, DebugPartitionedInnerJoinNoNulls)
+{
+  auto col0_0_elements =
+    cudf::detail::make_counting_transform_iterator(0, [](auto i) { return i / 100; });
+  auto col1_0_elements =
+    cudf::detail::make_counting_transform_iterator(0, [](auto i) { return i % 100; });
+  auto validity = cudf::detail::make_counting_transform_iterator(0, [](auto i) { return 1; });
+
+  column_wrapper<int32_t> col0_0(col0_0_elements, col0_0_elements + 200, validity);
+  column_wrapper<int32_t> col1_0(col1_0_elements, col1_0_elements + 2000, validity);
+
+  auto int_col0_0 = col0_0.release();
+  auto int_col1_0 = col1_0.release();
+  auto str_col0_0 = cudf::strings::from_integers(int_col0_0->view());
+  auto str_col1_0 = cudf::strings::from_integers(int_col1_0->view());
+
+  CVector cols0, cols1;
+  cols0.push_back(std::move(str_col0_0));
+  cols1.push_back(std::move(str_col1_0));
+
+  Table t0(std::move(cols0));
+  Table t1(std::move(cols1));
+
+  auto left_on       = std::vector<cudf::size_type>({0});
+  auto right_on      = std::vector<cudf::size_type>({0});
+  auto compare_nulls = cudf::null_equality::UNEQUAL;
+  auto expected_result =
+    inner_join(t0, t1, left_on, right_on, compare_nulls, algorithm::SORT_MERGE);
+  auto expected_result_sort_order = cudf::sorted_order(expected_result->view());
+  auto expected_sorted_result = cudf::gather(expected_result->view(), *expected_result_sort_order);
+
+  auto stream = cudf::get_default_stream();
+
+  cudf::sort_merge_join obj(t1.select(right_on), cudf::sorted::NO, compare_nulls, stream);
+  auto match_context = obj.inner_join_match_context(
+    t0.select(left_on), cudf::sorted::NO, stream, cudf::get_current_device_resource_ref());
+  auto partition_context = cudf::sort_merge_join::partition_context{std::move(match_context), 0, 0};
+
+  auto join_and_gather = [&t0, &t1, &obj, stream](
+                           cudf::sort_merge_join::partition_context const& cxt) {
+    auto const [left_join_indices, right_join_indices] =
+      obj.partitioned_inner_join(cxt, stream, cudf::get_current_device_resource_ref());
+
+    auto left_indices_span  = cudf::device_span<cudf::size_type const>{*left_join_indices};
+    auto right_indices_span = cudf::device_span<cudf::size_type const>{*right_join_indices};
+
+    auto left_indices_col  = cudf::column_view{left_indices_span};
+    auto right_indices_col = cudf::column_view{right_indices_span};
+
+    auto left_result  = cudf::gather(t0, left_indices_col, cudf::out_of_bounds_policy::DONT_CHECK);
+    auto right_result = cudf::gather(t1, right_indices_col, cudf::out_of_bounds_policy::DONT_CHECK);
+
+    auto joined_cols = left_result->release();
+    auto right_cols  = right_result->release();
+    joined_cols.insert(joined_cols.end(),
+                       std::make_move_iterator(right_cols.begin()),
+                       std::make_move_iterator(right_cols.end()));
+    return std::make_unique<cudf::table>(std::move(joined_cols));
+  };
+
+  std::vector<std::unique_ptr<cudf::table>> partial_tables;
+  std::vector<cudf::table_view> partial_table_views;
+  for (cudf::size_type i = 0; i < t0.num_rows(); i++) {
+    partition_context.left_start_idx = i;
+    partition_context.left_end_idx   = i + 1;
+    partial_tables.push_back(join_and_gather(partition_context));
+    partial_table_views.push_back(partial_tables.back()->view());
+  }
+
+  auto concatenated_result =
+    cudf::concatenate(partial_table_views, stream, cudf::get_current_device_resource_ref());
+  auto concatenated_result_sort_order = cudf::sorted_order(concatenated_result->view());
+  auto concatenated_sorted_result =
+    cudf::gather(concatenated_result->view(), *concatenated_result_sort_order);
+
+  CUDF_TEST_EXPECT_TABLES_EQUIVALENT(*expected_sorted_result, *concatenated_sorted_result);
 }
 
 TEST_P(JoinParameterizedTest, InnerJoinWithNulls)
