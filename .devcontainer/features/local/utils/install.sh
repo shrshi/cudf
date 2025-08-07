@@ -1,0 +1,95 @@
+#! /usr/bin/env bash
+set -e
+
+echo "Copying post attach script"
+# Copy script to a standard location
+# Check if source file exists before copying
+if [ -f post-attach.sh ]; then
+     cp post-attach.sh /usr/local/bin/local-feature-utils-post-attach
+     chmod +x /usr/local/bin/local-feature-utils-post-attach
+    echo "Successfully copied post-attach.sh"
+else
+    echo "Warning: post-attach.sh not found"
+    exit 1
+fi
+
+if [ -f /usr/local/bin/local-feature-utils-post-attach ]; then
+    echo "post-attach.sh copied successfully"
+else
+    echo "Warning: cannot find the script /usr/local/bin/local-feature-utils-post-attach"
+    exit 1
+fi
+
+echo "Installing essentials"
+DEBIAN_FRONTEND=noninteractive apt update
+DEBIAN_FRONTEND=noninteractive apt install -y file wget git build-essential gcc g++ gdb cmake make ninja-build curl openssh-client openssh-server
+
+echo "Installing ripgrep and fd"
+DEBIAN_FRONTEND=noninteractive apt update
+DEBIAN_FRONTEND=noninteractive apt install -y ripgrep fd-find
+
+echo "Installing pipx"
+DEBIAN_FRONTEND=noninteractive apt update
+DEBIAN_FRONTEND=noninteractive apt install -y pipx
+#echo "Pipx installing vectorcode"
+#pipx install vectorcode --python python3.12
+
+#echo "Exporting GPT4o API key"
+#apikey=$( cat /home/coder/.gpt4o-perflab )
+#printf "\nGPT4o_PERFLAB=${apikey}" >> /home/coder/.bashrc
+
+echo "Installing nodejs 22"
+mkdir -p /home/coder/node22
+mkdir -p /home/coder/node22/node22
+wget -P /home/coder/node22 https://nodejs.org/dist/v22.17.1/node-v22.17.1-linux-x64.tar.xz
+tar -xJf /home/coder/node22/node-v22.17.1-linux-x64.tar.xz -C /home/coder/node22/node22 --strip-components=1
+ln -s /home/coder/node22/node22/bin/node /usr/local/bin/node
+ln -s /home/coder/node22/node22/bin/npm /usr/local/bin/npm
+
+#echo "Installing claude code"
+npm install -g @anthropic-ai/claude-code
+ln -s /home/coder/node22/node22/bin/claude /usr/local/bin/claude
+#curl -fsSL claude.ai/install.sh | bash
+
+echo "Installing neovim"
+mkdir -p /home/coder/neovim
+wget -P /home/coder/neovim https://github.com/neovim/neovim/releases/download/v0.11.3/nvim-linux-x86_64.appimage
+cd /home/coder/neovim
+chmod u+x nvim-linux-x86_64.appimage
+./nvim-linux-x86_64.appimage --appimage-extract
+cd /usr/local/bin
+ ln -s /home/coder/neovim/squashfs-root/usr/bin/nvim .
+cd
+
+echo "Installing tmux"
+DEBIAN_FRONTEND=noninteractive apt install -y tmux
+echo "unset TMUX" >> /home/coder/.bashrc
+git clone https://github.com/samoshkin/tmux-config.git /home/coder/tmux-config
+tee /home/coder/tmux-config/tmux/tmux-conf.patch <<EOF
+18c18
+< set -g prefix C-a
+---
+> set -g prefix M-q
+41,42c41,42
+< unbind }    # swap-pane -D
+< unbind {    # swap-pane -U
+---
+> unbind \}    # swap-pane -D
+> unbind \{    # swap-pane -U
+98c98
+< bind \ if '[ #{pane_index} -eq 1 ]' \
+---
+> bind \\ if '[ #{pane_index} -eq 1 ]' \
+EOF
+patch /home/coder/tmux-config/tmux/tmux.conf /home/coder/tmux-config/tmux/tmux-conf.patch
+./home/coder/tmux-config/install.sh
+
+echo "Installing clangd"
+DEBIAN_FRONTEND=noninteractive apt install -y clangd-12
+update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-12 100
+
+echo "Installing nsight systems"
+temp_deb="(mktemp)" && \
+  wget -O "$temp_deb" https://developer.nvidia.com/downloads/assets/tools/secure/nsight-systems/2024_6/NsightSystems-linux-cli-public-2024.6.1.90-3490548.deb && \
+   dpkg -i "$temp_deb" && \
+  rm -f "$temp_deb"
