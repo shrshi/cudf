@@ -19,29 +19,29 @@ TOKEN_ENV_VAR_NAMES=("PERFLAB_LLM_APIKEY" "ANTHROPIC_AUTH_TOKEN")
 
 # Function to decrypt token and add to bashrc
 setup_token() {
-    if [ -f "$ENCRYPTED_TOKEN_FILE" ]; then
-        echo "Decrypting auth token..."
+  if [ -f "$ENCRYPTED_TOKEN_FILE" ]; then
+    echo "Decrypting auth token..."
 
-        # Prompt for password to decrypt
-        TOKEN=$(gpg --quiet --batch --decrypt "$ENCRYPTED_TOKEN_FILE" 2>/dev/null)
+    # Prompt for password to decrypt
+    TOKEN=$(gpg --quiet --batch --decrypt "$ENCRYPTED_TOKEN_FILE" 2>/dev/null)
 
-        if [ $? -eq 0 ] && [ ! -z "$TOKEN" ]; then
-            for TOKEN_ENV_VAR_NAME in "${TOKEN_ENV_VAR_NAMES[@]}"; do
-                # Add to .bashrc if not already there
-                if ! grep -q "export $TOKEN_ENV_VAR_NAME" ~/.bashrc; then
-                    echo "# Auth token from GPG" >> ~/.bashrc
-                    echo "export $TOKEN_ENV_VAR_NAME=\"$TOKEN\"" >> ~/.bashrc
-                    echo "Auth token added to environment variables."
-                else
-                    echo "Auth token already in .bashrc"
-                fi
-            done
+    if [ $? -eq 0 ] && [ ! -z "$TOKEN" ]; then
+      for TOKEN_ENV_VAR_NAME in "${TOKEN_ENV_VAR_NAMES[@]}"; do
+        # Add to .bashrc if not already there
+        if ! grep -q "export $TOKEN_ENV_VAR_NAME" ~/.bashrc; then
+          echo "# Auth token from GPG" >>~/.bashrc
+          echo "export $TOKEN_ENV_VAR_NAME=\"$TOKEN\"" >>~/.bashrc
+          echo "Auth token added to environment variables."
         else
-            echo "Failed to decrypt token. Please check your GPG password."
+          echo "Auth token already in .bashrc"
         fi
+      done
     else
-        echo "Warning: Auth token file not found at $ENCRYPTED_TOKEN_FILE"
-fi
+      echo "Failed to decrypt token. Please check your GPG password."
+    fi
+  else
+    echo "Warning: Auth token file not found at $ENCRYPTED_TOKEN_FILE"
+  fi
 }
 
 # Configure key for OneAPI LLM models to be used by Claude code and CodeCompanion
@@ -60,10 +60,10 @@ echo 'export XDG_CONFIG_HOME=/home/coder/.config' >>~/.bashrc
 
 # Github SSH key
 touch ~/.ssh/config
-cat > ~/.ssh/config <<EOF
+cat >~/.ssh/config <<EOF
 Host github.com
 HostName github.com
 User git
-IdentityFile /home/coder/.ssh/github.pub
+IdentityFile /home/coder/.ssh/github
 IdentitiesOnly yes
 EOF
