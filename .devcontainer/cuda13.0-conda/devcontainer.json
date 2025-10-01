@@ -40,7 +40,7 @@
       "installnvJPEG": false,
       "pruneStaticLibs": true
     },
-    "ghcr.io/rapidsai/devcontainers/features/rapids-build-utils:25.8": {},
+    "ghcr.io/rapidsai/devcontainers/features/rapids-build-utils:25.10": {},
     "../features/local/utils": {}
   },
   "overrideFeatureInstallOrder": [
