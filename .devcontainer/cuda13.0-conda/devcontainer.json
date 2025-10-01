@@ -64,7 +64,7 @@
     "source=${localWorkspaceFolder}/../.cache,target=/home/coder/.cache,type=bind,consistency=consistent",
     "source=${localWorkspaceFolder}/../.config,target=/home/coder/.config,type=bind,consistency=consistent",
     "source=${localWorkspaceFolder}/../.conda/pkgs,target=/home/coder/.conda/pkgs,type=bind,consistency=consistent",
-    "source=${localWorkspaceFolder}/../.conda/${localWorkspaceFolderBasename}-cuda12.8-envs,target=/home/coder/.conda/envs,type=bind,consistency=consistent",
+    "source=${localWorkspaceFolder}/../.conda/${localWorkspaceFolderBasename}-cuda13.0-envs,target=/home/coder/.conda/envs,type=bind,consistency=consistent",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/coder/.ssh,type=bind",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/nvim/init.lua,target=/home/coder/.config/nvim/init.lua,type=bind",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/nvim/lua,target=/home/coder/.config/nvim/lua,type=bind",
