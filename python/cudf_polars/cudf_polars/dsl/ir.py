@@ -223,7 +223,7 @@ def _align_parquet_schema(df: DataFrame, schema: Schema) -> DataFrame:
 
     for name, col in df.column_map.items():
         src = col.obj.type()
-        dst = schema[name].plc
+        dst = schema[name].plc_type
         if (
             src.id() in plc_decimals_ids
             and dst.id() in plc_decimals_ids
@@ -567,7 +567,9 @@ class Scan(IR):
                         column_names = read_csv_header(path, str(sep))
                         options.set_names(column_names)
                 options.set_header(header)
-                options.set_dtypes({name: dtype.plc for name, dtype in schema.items()})
+                options.set_dtypes(
+                    {name: dtype.plc_type for name, dtype in schema.items()}
+                )
                 if usecols is not None:
                     options.set_use_cols_names([str(name) for name in usecols])
                 options.set_na_values(null_values)
@@ -665,7 +667,7 @@ class Scan(IR):
                 return df
         elif typ == "ndjson":
             json_schema: list[plc.io.json.NameAndType] = [
-                (name, typ.plc, []) for name, typ in schema.items()
+                (name, typ.plc_type, []) for name, typ in schema.items()
             ]
             plc_tbl_w_meta = plc.io.json.read_json(
                 plc.io.json._setup_json_reader_options(
@@ -695,8 +697,8 @@ class Scan(IR):
             name, offset = row_index
             offset += skip_rows
             dtype = schema[name]
-            step = plc.Scalar.from_py(1, dtype.plc)
-            init = plc.Scalar.from_py(offset, dtype.plc)
+            step = plc.Scalar.from_py(1, dtype.plc_type)
+            init = plc.Scalar.from_py(offset, dtype.plc_type)
             index_col = Column(
                 plc.filling.sequence(df.num_rows, init, step),
                 is_sorted=plc.types.Sorted.YES,
@@ -709,7 +711,7 @@ class Scan(IR):
             if next(iter(schema)) != name:
                 df = df.select(schema)
         assert all(
-            c.obj.type() == schema[name].plc for name, c in df.column_map.items()
+            c.obj.type() == schema[name].plc_type for name, c in df.column_map.items()
         )
         if predicate is None:
             return df
@@ -775,7 +777,8 @@ class Sink(IR):
         child_schema = df.schema.values()
         if kind == "Csv":
             if not all(
-                plc.io.csv.is_supported_write_csv(dtype.plc) for dtype in child_schema
+                plc.io.csv.is_supported_write_csv(dtype.plc_type)
+                for dtype in child_schema
             ):
                 # Nested types are unsupported in polars and libcudf
                 raise NotImplementedError(
@@ -826,7 +829,8 @@ class Sink(IR):
             kind == "Json"
         ):  # pragma: no cover; options are validated on the polars side
             if not all(
-                plc.io.json.is_supported_write_json(dtype.plc) for dtype in child_schema
+                plc.io.json.is_supported_write_json(dtype.plc_type)
+                for dtype in child_schema
             ):
                 # Nested types are unsupported in polars and libcudf
                 raise NotImplementedError(
@@ -1122,7 +1126,7 @@ class DataFrameScan(IR):
             df = df.select(projection)
         df = DataFrame.from_polars(df)
         assert all(
-            c.obj.type() == dtype.plc
+            c.obj.type() == dtype.plc_type
             for c, dtype in zip(df.columns, schema.values(), strict=True)
         )
         return df
@@ -1220,7 +1224,7 @@ class Select(IR):
             dtype = DataType(pl.UInt32())  # pragma: no cover
             col = Column(
                 plc.Column.from_scalar(
-                    plc.Scalar.from_py(effective_rows, dtype.plc),
+                    plc.Scalar.from_py(effective_rows, dtype.plc_type),
                     1,
                 ),
                 name=self.exprs[0].name or "len",
@@ -1322,7 +1326,7 @@ class Rolling(IR):
         self.agg_requests = tuple(agg_requests)
         if not all(
             plc.rolling.is_valid_rolling_aggregation(
-                agg.value.dtype.plc, agg.value.agg_request
+                agg.value.dtype.plc_type, agg.value.agg_request
             )
             for agg in self.agg_requests
         ):
@@ -1704,6 +1708,19 @@ class Join(IR):
     - maintain_order: which DataFrame row order to preserve, if any
     """
 
+    SWAPPED_ORDER: ClassVar[
+        dict[
+            Literal["none", "left", "right", "left_right", "right_left"],
+            Literal["none", "left", "right", "left_right", "right_left"],
+        ]
+    ] = {
+        "none": "none",
+        "left": "right",
+        "right": "left",
+        "left_right": "right_left",
+        "right_left": "left_right",
+    }
+
     def __init__(
         self,
         schema: Schema,
@@ -1719,9 +1736,6 @@ class Join(IR):
         self.options = options
         self.children = (left, right)
         self._non_child_args = (self.left_on, self.right_on, self.options)
-        # TODO: Implement maintain_order
-        if options[5] != "none":
-            raise NotImplementedError("maintain_order not implemented yet")
 
     @staticmethod
     @cache
@@ -1770,6 +1784,8 @@ class Join(IR):
         right_rows: int,
         rg: plc.Column,
         right_policy: plc.copying.OutOfBoundsPolicy,
+        *,
+        left_primary: bool = True,
     ) -> list[plc.Column]:
         """
         Reorder gather maps to satisfy polars join order restrictions.
@@ -1788,28 +1804,40 @@ class Join(IR):
             Right gather map
         right_policy
             Nullify policy for right map
+        left_primary
+            Whether to preserve the left input row order first.
+            Defaults to True.
 
         Returns
         -------
-        list of reordered left and right gather maps.
+        list[plc.Column]
+            Reordered left and right gather maps.
 
         Notes
         -----
-        For a left join, the polars result preserves the order of the
-        left keys, and is stable wrt the right keys. For all other
-        joins, there is no order obligation.
+        When ``left_primary`` is True, the pair of gather maps is stably sorted by
+        the original row order of the left side, breaking ties by the right side.
+        And vice versa when ``left_primary`` is False.
         """
         init = plc.Scalar.from_py(0, plc.types.SIZE_TYPE)
         step = plc.Scalar.from_py(1, plc.types.SIZE_TYPE)
-        left_order = plc.copying.gather(
+
+        (left_order_col,) = plc.copying.gather(
             plc.Table([plc.filling.sequence(left_rows, init, step)]), lg, left_policy
-        )
-        right_order = plc.copying.gather(
+        ).columns()
+        (right_order_col,) = plc.copying.gather(
             plc.Table([plc.filling.sequence(right_rows, init, step)]), rg, right_policy
+        ).columns()
+
+        keys = (
+            plc.Table([left_order_col, right_order_col])
+            if left_primary
+            else plc.Table([right_order_col, left_order_col])
         )
+
         return plc.sorting.stable_sort_by_key(
             plc.Table([lg, rg]),
-            plc.Table([*left_order.columns(), *right_order.columns()]),
+            keys,
             [plc.types.Order.ASCENDING, plc.types.Order.ASCENDING],
             [plc.types.NullOrder.AFTER, plc.types.NullOrder.AFTER],
         ).columns()
@@ -1826,7 +1854,7 @@ class Join(IR):
         if empty:
             return [
                 Column(
-                    plc.column_factories.make_empty_column(col.dtype.plc),
+                    plc.column_factories.make_empty_column(col.dtype.plc_type),
                     col.dtype,
                     name=rename(col.name),
                 )
@@ -1864,7 +1892,7 @@ class Join(IR):
         right: DataFrame,
     ) -> DataFrame:
         """Evaluate and return a dataframe."""
-        how, nulls_equal, zlice, suffix, coalesce, _ = options
+        how, nulls_equal, zlice, suffix, coalesce, maintain_order = options
         if how == "Cross":
             # Separate implementation, since cross_join returns the
             # result, not the gather maps
@@ -1914,11 +1942,18 @@ class Join(IR):
                 # Right join is a left join with the tables swapped
                 left, right = right, left
                 left_on, right_on = right_on, left_on
+                maintain_order = Join.SWAPPED_ORDER[maintain_order]
+
             lg, rg = join_fn(left_on.table, right_on.table, null_equality)
-            if how == "Left" or how == "Right":
-                # Order of left table is preserved
+            if how in ("Inner", "Left", "Right", "Full") and maintain_order != "none":
                 lg, rg = cls._reorder_maps(
-                    left.num_rows, lg, left_policy, right.num_rows, rg, right_policy
+                    left.num_rows,
+                    lg,
+                    left_policy,
+                    right.num_rows,
+                    rg,
+                    right_policy,
+                    left_primary=maintain_order.startswith("left"),
                 )
             if coalesce:
                 if how == "Full":
@@ -2347,7 +2382,7 @@ class MapFunction(IR):
                 index = frozenset(indices)
                 pivotees = [name for name in df.schema if name not in index]
             if not all(
-                dtypes.can_cast(df.schema[p].plc, self.schema[value_name].plc)
+                dtypes.can_cast(df.schema[p].plc_type, self.schema[value_name].plc_type)
                 for p in pivotees
             ):
                 raise NotImplementedError(
@@ -2434,7 +2469,7 @@ class MapFunction(IR):
                     [
                         plc.Column.from_arrow(
                             pl.Series(
-                                values=pivotees, dtype=schema[variable_name].polars
+                                values=pivotees, dtype=schema[variable_name].polars_type
                             )
                         )
                     ]
@@ -2459,8 +2494,8 @@ class MapFunction(IR):
         elif name == "row_index":
             col_name, offset = options
             dtype = schema[col_name]
-            step = plc.Scalar.from_py(1, dtype.plc)
-            init = plc.Scalar.from_py(offset, dtype.plc)
+            step = plc.Scalar.from_py(1, dtype.plc_type)
+            init = plc.Scalar.from_py(offset, dtype.plc_type)
             index_col = Column(
                 plc.filling.sequence(df.num_rows, init, step),
                 is_sorted=plc.types.Sorted.YES,
@@ -2598,7 +2633,7 @@ class Empty(IR):
         return DataFrame(
             [
                 Column(
-                    plc.column_factories.make_empty_column(dtype.plc),
+                    plc.column_factories.make_empty_column(dtype.plc_type),
                     dtype=dtype,
                     name=name,
                 )

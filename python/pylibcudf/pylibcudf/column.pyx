@@ -747,7 +747,12 @@ cdef class Column:
         )
 
     @staticmethod
-    def from_scalar(Scalar slr, size_type size, Stream stream=None):
+    def from_scalar(
+        Scalar slr,
+        size_type size,
+        Stream stream=None,
+        DeviceMemoryResource mr=None,
+    ):
         """Create a Column from a Scalar.
 
         Parameters
@@ -767,15 +772,17 @@ cdef class Column:
         cdef const scalar* c_scalar = slr.get()
         cdef unique_ptr[column] c_result
         stream = _get_stream(stream)
+        mr = _get_memory_resource(mr)
         with nogil:
             c_result = make_column_from_scalar(
                 dereference(c_scalar),
                 size,
-                stream.view()
+                stream.view(),
+                mr.get_mr()
             )
-        return Column.from_libcudf(move(c_result), stream)
+        return Column.from_libcudf(move(c_result), stream, mr)
 
-    cpdef Scalar to_scalar(self, Stream stream=None):
+    cpdef Scalar to_scalar(self, Stream stream=None, DeviceMemoryResource mr=None):
         """
         Return the first value of 1-element column as a Scalar.
 
@@ -785,6 +792,8 @@ cdef class Column:
             If the column has more than one row.
         stream : Stream | None
             CUDA stream on which to perform the operation.
+        mr : DeviceMemoryResource | None
+            Device memory resource used to allocate the returned scalar's device memory.
 
         Returns
         -------
@@ -797,14 +806,20 @@ cdef class Column:
         cdef column_view cv = self.view()
         cdef unique_ptr[scalar] result
         stream = _get_stream(stream)
+        mr = _get_memory_resource(mr)
 
         with nogil:
-            result = get_element(cv, 0, stream.view())
+            result = get_element(cv, 0, stream.view(), mr.get_mr())
 
         return Scalar.from_libcudf(move(result))
 
     @staticmethod
-    def all_null_like(Column like, size_type size, Stream stream=None):
+    def all_null_like(
+        Column like,
+        size_type size,
+        Stream stream=None,
+        DeviceMemoryResource mr=None,
+    ):
         """Create an all null column from a template.
 
         Parameters
@@ -824,13 +839,15 @@ cdef class Column:
         cdef Scalar slr = Scalar.empty_like(like)
         cdef unique_ptr[column] c_result
         stream = _get_stream(stream)
+        mr = _get_memory_resource(mr)
         with nogil:
             c_result = make_column_from_scalar(
                 dereference(slr.get()),
                 size,
-                stream.view()
+                stream.view(),
+                mr.get_mr()
             )
-        return Column.from_libcudf(move(c_result), stream)
+        return Column.from_libcudf(move(c_result), stream, mr)
 
     @staticmethod
     cdef Column _wrap_nested_list_column(
@@ -1247,13 +1264,14 @@ cdef class Column:
         """The children of the column."""
         return self._children
 
-    cpdef Column copy(self, Stream stream=None):
+    cpdef Column copy(self, Stream stream=None, DeviceMemoryResource mr=None):
         """Create a copy of the column."""
         cdef unique_ptr[column] c_result
         stream = _get_stream(stream)
+        mr = _get_memory_resource(mr)
         with nogil:
             c_result = make_unique[column](self.view(), stream.view())
-        return Column.from_libcudf(move(c_result), stream)
+        return Column.from_libcudf(move(c_result), stream, mr)
 
     cpdef uint64_t device_buffer_size(self):
         """
