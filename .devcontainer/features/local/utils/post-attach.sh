@@ -64,6 +64,6 @@ cat >~/.ssh/config <<EOF
 Host github.com
 HostName github.com
 User git
-IdentityFile /home/coder/.ssh/github
+IdentityFile ~/.ssh/github
 IdentitiesOnly yes
 EOF
