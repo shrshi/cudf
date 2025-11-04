@@ -1,22 +1,25 @@
 #! /usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 set -e
 
-echo "Copying post attach script"
+echo "Copying post create script"
 # Copy script to a standard location
 # Check if source file exists before copying
-if [ -f post-attach.sh ]; then
-     cp post-attach.sh /usr/local/bin/local-feature-utils-post-attach
-     chmod +x /usr/local/bin/local-feature-utils-post-attach
-    echo "Successfully copied post-attach.sh"
+if [ -f post-create.sh ]; then
+     cp post-create.sh /usr/local/bin/local-feature-utils-post-create
+     chmod +x /usr/local/bin/local-feature-utils-post-create
+    echo "Successfully copied post-create.sh"
 else
-    echo "Warning: post-attach.sh not found"
+    echo "Warning: post-create.sh not found"
     exit 1
 fi
 
-if [ -f /usr/local/bin/local-feature-utils-post-attach ]; then
-    echo "post-attach.sh copied successfully"
+if [ -f /usr/local/bin/local-feature-utils-post-create ]; then
+    echo "post-create.sh copied successfully"
 else
-    echo "Warning: cannot find the script /usr/local/bin/local-feature-utils-post-attach"
+    echo "Warning: cannot find the script /usr/local/bin/local-feature-utils-post-create"
     exit 1
 fi
 
@@ -33,10 +36,6 @@ DEBIAN_FRONTEND=noninteractive apt update
 DEBIAN_FRONTEND=noninteractive apt install -y pipx
 #echo "Pipx installing vectorcode"
 #pipx install vectorcode --python python3.12
-
-#echo "Exporting GPT4o API key"
-#apikey=$( cat /home/coder/.gpt4o-perflab )
-#printf "\nGPT4o_PERFLAB=${apikey}" >> /home/coder/.bashrc
 
 echo "Installing nodejs 22"
 mkdir -p /home/coder/node22

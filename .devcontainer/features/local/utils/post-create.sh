@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 
 echo "Running post attach commands"
 
@@ -15,7 +18,7 @@ echo "unset PROMPT_COMMAND" >>~/.bashrc
 
 # Path to the encrypted token file
 ENCRYPTED_TOKEN_FILE="/home/coder/.oneapi-perflab-nvidia.key.gpg"
-TOKEN_ENV_VAR_NAMES=("PERFLAB_LLM_APIKEY" "ANTHROPIC_AUTH_TOKEN")
+TOKEN_ENV_VAR_NAMES=("PERFLAB_LLM_APIKEY" "ANTHROPIC_AUTH_TOKEN" "AZURE_OPENAI_API_KEY")
 
 # Function to decrypt token and add to bashrc
 setup_token() {
@@ -67,3 +70,6 @@ User git
 IdentityFile ~/.ssh/github
 IdentitiesOnly yes
 EOF
+
+# Goose
+curl -fsSL https://github.com/block/goose/releases/download/v1.7.0/download_cli.sh | bash

@@ -3,5 +3,5 @@
   "id": "utils",
   "version": "0.alpha",
   "description": "A feature to install commandline utilities",
-  "postCreateCommand": "/usr/local/bin/local-feature-utils-post-attach"
+  "postCreateCommand": "/usr/local/bin/local-feature-utils-post-create"
 }
