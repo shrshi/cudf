@@ -134,9 +134,9 @@ std::string_view operation::get_id() { return id_; }
 
 data_type operation::get_type() { return type_; }
 
-bool operation::is_null_aware()
+inline bool is_operator_null_aware(opcode op)
 {
-  switch (op_) {
+  switch (op) {
     case ast::ast_operator::IS_NULL:
     case ast::ast_operator::NULL_EQUAL:
     case ast::ast_operator::NULL_LOGICAL_AND:
@@ -187,17 +187,22 @@ bool operation::is_null_aware()
     case ast::ast_operator::NOT:
     case ast::ast_operator::CAST_TO_INT64:
     case ast::ast_operator::CAST_TO_UINT64:
-    case ast::ast_operator::CAST_TO_FLOAT64:
-      return std::any_of(
-        operands_.begin(), operands_.end(), [](auto& op) { return op->is_null_aware(); });
+    case ast::ast_operator::CAST_TO_FLOAT64: return false;
 
     default: CUDF_UNREACHABLE("Unrecognized operator type.");
   }
 }
 
-bool operation::is_always_valid()
+bool operation::is_null_aware()
 {
-  switch (op_) {
+  return is_operator_null_aware(op_) ||
+         std::any_of(
+           operands_.begin(), operands_.end(), [](auto& op) { return op->is_null_aware(); });
+}
+
+inline bool is_operator_always_valid(opcode op)
+{
+  switch (op) {
     case ast::ast_operator::IS_NULL:
     case ast::ast_operator::NULL_EQUAL: return true;
 
@@ -248,12 +253,17 @@ bool operation::is_always_valid()
     case ast::ast_operator::NOT:
     case ast::ast_operator::CAST_TO_INT64:
     case ast::ast_operator::CAST_TO_UINT64:
-    case ast::ast_operator::CAST_TO_FLOAT64:
-      return std::all_of(
-        operands_.begin(), operands_.end(), [](auto& op) { return op->is_always_valid(); });
+    case ast::ast_operator::CAST_TO_FLOAT64: return false;
 
     default: CUDF_UNREACHABLE("Unrecognized operator type.");
   }
+}
+
+bool operation::is_always_valid()
+{
+  return is_operator_always_valid(op_) ||
+         std::all_of(
+           operands_.begin(), operands_.end(), [](auto& op) { return op->is_always_valid(); });
 }
 
 opcode operation::get_opcode() const { return op_; }
@@ -403,9 +413,9 @@ column_view get_column_view(ast_scalar_input_spec const& spec, ast_args const& a
   return spec.broadcast_column->view();
 }
 
-std::tuple<null_aware, null_output> ast_converter::generate_code(target target_id,
-                                                                 ast::expression const& expr,
-                                                                 ast_args const& args)
+std::tuple<null_aware, output_nullability> ast_converter::generate_code(target target_id,
+                                                                        ast::expression const& expr,
+                                                                        ast_args const& args)
 {
   auto output_expr_ir = expr.accept(*this);
   output_irs_.emplace_back(std::make_unique<row_ir::set_output>(0, std::move(output_expr_ir)));
@@ -451,7 +461,8 @@ std::tuple<null_aware, null_output> ast_converter::generate_code(target target_i
     output_irs_.cbegin(), output_irs_.cend(), [](auto& ir) { return ir->is_always_valid(); });
 
   bool may_evaluate_null = !output_is_always_valid && has_nullable_inputs;
-  auto null_policy       = may_evaluate_null ? null_output::PRESERVE : null_output::NON_NULLABLE;
+  auto null_policy =
+    may_evaluate_null ? output_nullability::PRESERVE : output_nullability::ALL_VALID;
 
   instance_ctx.set_has_nulls(is_null_aware == null_aware::YES);
 
@@ -541,7 +552,7 @@ transform_args ast_converter::compute_column(target target_id,
   // TODO(lamarrr): consider deduplicating ast expression's input column references. See
   // TransformTest/1.DeeplyNestedArithmeticLogicalExpression for reference
 
-  auto [is_null_aware, null_output] = converter.generate_code(target_id, expr, args);
+  auto [is_null_aware, output_nullability] = converter.generate_code(target_id, expr, args);
 
   std::vector<column_view> columns;
   std::vector<std::unique_ptr<column>> scalar_columns;
@@ -567,7 +578,7 @@ transform_args ast_converter::compute_column(target target_id,
                            false,
                            std::nullopt,
                            is_null_aware,
-                           null_output};
+                           output_nullability};
 
   if (get_context().dump_codegen()) {
     std::cout << "Generated code for transform: " << transform.udf << std::endl;
