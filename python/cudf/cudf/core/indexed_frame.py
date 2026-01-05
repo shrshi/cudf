@@ -92,6 +92,7 @@ if TYPE_CHECKING:
         MutableMapping,
         Sequence,
     )
+    from types import NotImplementedType
 
     from cudf._typing import (
         Axis,
@@ -99,7 +100,6 @@ if TYPE_CHECKING:
         DataFrameOrSeries,
         Dtype,
         DtypeObj,
-        NotImplementedType,
         ScalarLike,
     )
     from cudf.core.series import Series
@@ -3071,9 +3071,7 @@ class IndexedFrame(Frame):
         )
         with acquire_spill_lock():
             plc_tables = plc.copying.slice(
-                plc.Table(
-                    [col.to_pylibcudf(mode="read") for col in columns_to_slice]
-                ),
+                plc.Table([col.plc_column for col in columns_to_slice]),
                 [start, stop],
             )
             sliced = [

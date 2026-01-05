@@ -37,6 +37,7 @@ from cudf.utils.dtypes import (
 from cudf.utils.scalar import pa_scalar_to_plc_scalar
 
 if TYPE_CHECKING:
+    import datetime
     from collections.abc import Callable
 
     from cudf._typing import (
@@ -111,19 +112,13 @@ class DatetimeColumn(TemporalBaseColumn):
     def __init__(
         self,
         plc_column: plc.Column,
-        size: int,
         dtype: np.dtype | pd.DatetimeTZDtype,
-        offset: int,
-        null_count: int,
         exposed: bool,
     ) -> None:
         dtype = self._validate_dtype_instance(dtype)
         super().__init__(
             plc_column=plc_column,
-            size=size,
             dtype=dtype,
-            offset=offset,
-            null_count=null_count,
             exposed=exposed,
         )
 
@@ -196,7 +191,7 @@ class DatetimeColumn(TemporalBaseColumn):
     @acquire_spill_lock()
     def quarter(self) -> ColumnBase:
         return type(self).from_pylibcudf(
-            plc.datetime.extract_quarter(self.to_pylibcudf(mode="read"))
+            plc.datetime.extract_quarter(self.plc_column)
         )
 
     @functools.cached_property
@@ -246,7 +241,7 @@ class DatetimeColumn(TemporalBaseColumn):
     @acquire_spill_lock()
     def day_of_year(self) -> ColumnBase:
         return type(self).from_pylibcudf(
-            plc.datetime.day_of_year(self.to_pylibcudf(mode="read"))
+            plc.datetime.day_of_year(self.plc_column)
         )
 
     @functools.cached_property
@@ -257,7 +252,7 @@ class DatetimeColumn(TemporalBaseColumn):
     def is_month_end(self) -> ColumnBase:
         with acquire_spill_lock():
             last_day_col = type(self).from_pylibcudf(
-                plc.datetime.last_day_of_month(self.to_pylibcudf(mode="read"))
+                plc.datetime.last_day_of_month(self.plc_column)
             )
         return (self.day == last_day_col.day).fillna(False)
 
@@ -284,7 +279,7 @@ class DatetimeColumn(TemporalBaseColumn):
     @acquire_spill_lock()
     def is_leap_year(self) -> ColumnBase:
         return type(self).from_pylibcudf(
-            plc.datetime.is_leap_year(self.to_pylibcudf(mode="read"))
+            plc.datetime.is_leap_year(self.plc_column)
         )
 
     @functools.cached_property
@@ -295,7 +290,7 @@ class DatetimeColumn(TemporalBaseColumn):
     @acquire_spill_lock()
     def days_in_month(self) -> ColumnBase:
         return type(self).from_pylibcudf(
-            plc.datetime.days_in_month(self.to_pylibcudf(mode="read"))
+            plc.datetime.days_in_month(self.plc_column)
         )
 
     @functools.cached_property
@@ -303,7 +298,7 @@ class DatetimeColumn(TemporalBaseColumn):
         raise NotImplementedError("day_of_week is currently not implemented.")
 
     @functools.cached_property
-    def tz(self):
+    def tz(self) -> datetime.tzinfo | None:
         """
         Return the timezone.
 
@@ -325,15 +320,15 @@ class DatetimeColumn(TemporalBaseColumn):
         raise NotImplementedError("freq is not yet implemented.")
 
     @functools.cached_property
-    def date(self):
+    def date(self) -> None:
         raise NotImplementedError("date is not yet implemented.")
 
     @functools.cached_property
-    def time(self):
+    def time(self) -> None:
         raise NotImplementedError("time is not yet implemented.")
 
     @functools.cached_property
-    def timetz(self):
+    def timetz(self) -> None:
         raise NotImplementedError("timetz is not yet implemented.")
 
     @functools.cached_property
@@ -356,7 +351,7 @@ class DatetimeColumn(TemporalBaseColumn):
     ) -> ColumnBase:
         return type(self).from_pylibcudf(
             plc.datetime.extract_datetime_component(
-                self.to_pylibcudf(mode="read"),
+                self.plc_column,
                 field,
             )
         )
@@ -428,7 +423,7 @@ class DatetimeColumn(TemporalBaseColumn):
         with acquire_spill_lock():
             return type(self).from_pylibcudf(
                 round_func(
-                    self.to_pylibcudf(mode="read"),
+                    self.plc_column,
                     plc_freq,
                 )
             )
@@ -528,7 +523,7 @@ class DatetimeColumn(TemporalBaseColumn):
         with acquire_spill_lock():
             return type(self).from_pylibcudf(  # type: ignore[return-value]
                 plc.strings.convert.convert_datetime.from_timestamps(
-                    self.to_pylibcudf(mode="read"),
+                    self.plc_column,
                     format,
                     names,
                 )
@@ -692,10 +687,7 @@ class DatetimeColumn(TemporalBaseColumn):
         if isinstance(dtype, pd.DatetimeTZDtype):
             return DatetimeTZColumn(
                 plc_column=self.plc_column,
-                size=self.size,
                 dtype=dtype,
-                offset=self.offset,
-                null_count=self.null_count,
                 exposed=False,
             )
         if cudf.get_option("mode.pandas_compatible"):
@@ -859,10 +851,7 @@ class DatetimeTZColumn(DatetimeColumn):
         """Return UTC time as naive timestamps."""
         return DatetimeColumn(
             plc_column=self.plc_column,
-            size=self.size,
             dtype=_get_base_dtype(self.dtype),
-            offset=self.offset,
-            null_count=self.null_count,
             exposed=False,
         )
 
@@ -901,7 +890,7 @@ class DatetimeTZColumn(DatetimeColumn):
     ) -> ColumnBase:
         return type(self).from_pylibcudf(
             plc.datetime.extract_datetime_component(
-                self._local_time.to_pylibcudf(mode="read"),
+                self._local_time.plc_column,
                 field,
             )
         )

@@ -33,10 +33,15 @@ using parquet::detail::row_group_info;
 /**
  * @brief Class for parsing dataset metadata
  */
-struct metadata : private metadata_base {
+struct metadata : public metadata_base {
   explicit metadata(cudf::host_span<uint8_t const> footer_bytes);
   explicit metadata(FileMetaData const& other) { static_cast<FileMetaData&>(*this) = other; }
-  metadata_base get_file_metadata() && { return std::move(*this); }
+  metadata(metadata const& other)            = delete;
+  metadata(metadata&& other)                 = default;
+  metadata& operator=(metadata const& other) = delete;
+  metadata& operator=(metadata&& other)      = default;
+
+  ~metadata() = default;
 };
 
 class aggregate_reader_metadata : public aggregate_reader_metadata_base {
@@ -93,6 +98,11 @@ class aggregate_reader_metadata : public aggregate_reader_metadata_base {
                             bool use_arrow_schema,
                             bool has_cols_from_mismatched_srcs);
 
+  aggregate_reader_metadata(aggregate_reader_metadata const&)            = delete;
+  aggregate_reader_metadata& operator=(aggregate_reader_metadata const&) = delete;
+  aggregate_reader_metadata(aggregate_reader_metadata&&)                 = default;
+  aggregate_reader_metadata& operator=(aggregate_reader_metadata&&)      = default;
+
   /**
    * @brief Initialize the internal variables
    */
@@ -145,6 +155,24 @@ class aggregate_reader_metadata : public aggregate_reader_metadata_base {
                            bool strings_to_categorical,
                            bool ignore_missing_columns,
                            type_id timestamp_type_id);
+
+  /**
+   * @brief Filters row groups such that only the row groups that start within the byte range
+   * specified by [`bytes_to_skip`, `bytes_to_skip + bytes_to_read`) are selected
+   *
+   * @note The last selected row group may end beyond the byte range.
+   *
+   * @param row_group_indices Input row groups indices
+   * @param bytes_to_skip Bytes to skip before selecting row groups
+   * @param bytes_to_read Optional bytes to select row groups from after skipping. All row groups
+   * until the end of the file are selected if not provided
+   *
+   * @return Filtered row group indices
+   */
+  [[nodiscard]] std::vector<std::vector<cudf::size_type>> filter_row_groups_with_byte_range(
+    cudf::host_span<std::vector<size_type> const> row_group_indices,
+    std::size_t bytes_to_skip,
+    std::optional<std::size_t> const& bytes_to_read) const;
 
   /**
    * @brief Filter the row groups with statistics based on predicate filter
@@ -325,6 +353,47 @@ class dictionary_literals_collector : public equality_literals_collector {
 
  private:
   std::vector<std::vector<ast::ast_operator>> _operators;
+};
+
+/**
+ * @brief Converts named columns to index reference columns
+ */
+class named_to_reference_converter : public parquet::detail::named_to_reference_converter {
+ public:
+  named_to_reference_converter(std::optional<std::reference_wrapper<ast::expression const>> expr,
+                               table_metadata const& metadata,
+                               std::vector<SchemaElement> const& schema_tree);
+
+  using parquet::detail::named_to_reference_converter::visit;
+
+  /**
+   * @copydoc ast::detail::expression_transformer::visit(ast::column_reference const& )
+   */
+  std::reference_wrapper<ast::expression const> visit(ast::column_reference const& expr) override;
+
+ private:
+  std::unordered_map<int32_t, std::string> _column_indices_to_names;
+};
+
+/**
+ * @brief Collects column names from the expression ignoring the `skip_names`
+ */
+class names_from_expression : public parquet::detail::names_from_expression {
+ public:
+  names_from_expression(std::optional<std::reference_wrapper<ast::expression const>> expr,
+                        std::vector<std::string> const& skip_names,
+                        std::optional<std::vector<std::string>> selected_columns,
+                        std::vector<SchemaElement> const& schema_tree);
+
+  using parquet::detail::names_from_expression::visit;
+
+  /**
+   * @copydoc ast::detail::expression_transformer::visit(ast::column_reference const& )
+   */
+  std::reference_wrapper<ast::expression const> visit(ast::column_reference const& expr) override;
+
+ private:
+  std::unordered_map<int32_t, std::string> _column_indices_to_names;
 };
 
 }  // namespace cudf::io::parquet::experimental::detail

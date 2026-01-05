@@ -62,6 +62,7 @@ jobs:
       sha: ${{ inputs.sha }}
       script: "ci/cpp_linters.sh"
       file_to_upload: iwyu_results.txt
+      node_type: cpu16
   conda-python-cudf-tests:
     secrets: inherit
     uses: rapidsai/shared-workflows/.github/workflows/conda-python-tests.yaml@main
@@ -146,8 +147,7 @@ jobs:
       date: ${{ inputs.date }}
       sha: ${{ inputs.sha }}
       node_type: "gpu-l4-latest-1"
-      # TODO: Switch to ci-conda:25-10-latest when XGBoost has CUDA 13 packages
-      container_image: "rapidsai/ci-conda:26.02-cuda12.9.1-ubuntu24.04-py3.13"
+      container_image: "rapidsai/ci-conda:26.02-latest"
       script: |
         ci/cudf_pandas_scripts/third-party-integration/test.sh python/cudf/cudf_pandas_tests/third_party_integration_tests/dependencies.yaml
       continue-on-error: true

@@ -35,12 +35,12 @@ repos:
     hooks:
       - id: mypy
         additional_dependencies: [
-          numpy,
           polars,
+          "numpy",
           pyarrow-stubs,
           pytest,
           types-cachetools,
-          "rmm-cu12==26.2.*,>=0.0.0a0",
+          "rmm-cu12==26.2.*,>=0.0.0a0; sys_platform=='linux'",
           "--extra-index-url=https://pypi.anaconda.org/rapidsai-wheels-nightly/simple/"
         ]
         args: ["--config-file=pyproject.toml",
