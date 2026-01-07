@@ -3,6 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "cuda/__functional/proclaim_return_type.h"
+#include "cuda/__iterator/constant_iterator.h"
+#include "cuda/__iterator/permutation_iterator.h"
+#include "cuda/__iterator/transform_iterator.h"
+#include "cuda/__iterator/transform_output_iterator.h"
 #include <cudf/column/column_device_view.cuh>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
@@ -27,6 +32,7 @@
 #include <rmm/resource_ref.hpp>
 
 #include <cuda/functional>
+#include <cuda/iterator>
 #include <cuda/std/iterator>
 #include <cuda/std/tuple>
 #include <thrust/binary_search.h>
@@ -37,6 +43,8 @@
 #include <thrust/transform.h>
 #include <thrust/uninitialized_fill.h>
 #include <thrust/unique.h>
+
+#include <cub/cub.cuh>
 
 #include <memory>
 #include <utility>
@@ -182,25 +190,40 @@ merge<LargerIterator, SmallerIterator>::operator()(rmm::cuda_stream_view stream,
                   nonzero_matches.begin(),
                   cuda::std::identity{});
 
+  rmm::device_uvector<size_type> match_offsets(match_counts->size(), stream, mr);
   thrust::exclusive_scan(rmm::exec_policy_nosync(stream),
                          match_counts->begin(),
                          match_counts->end(),
-                         match_counts->begin());
-  auto const total_matches = match_counts->back_element(stream);
+                         match_offsets.begin());
+  auto const total_matches = match_offsets.back_element(stream);
 
   // populate larger indices
   auto larger_indices =
     cudf::detail::make_zeroed_device_uvector_async<size_type>(total_matches, stream, mr);
+  /*
   thrust::scatter(rmm::exec_policy_nosync(stream),
                   nonzero_matches.begin(),
                   nonzero_matches.end(),
-                  thrust::permutation_iterator(match_counts->begin(), nonzero_matches.begin()),
+                  thrust::permutation_iterator(match_offsets.begin(), nonzero_matches.begin()),
                   larger_indices.begin());
   thrust::inclusive_scan(rmm::exec_policy_nosync(stream),
                          larger_indices.begin(),
                          larger_indices.end(),
                          larger_indices.begin(),
                          thrust::maximum<size_type>{});
+  */
+  auto input_iterators = cuda::transform_iterator(nonzero_matches.begin(), 
+      cuda::proclaim_return_type<cuda::constant_iterator<size_type>>(
+        [] __device__(auto val) { return cuda::constant_iterator<size_type>(val); }));
+  auto output_iterators = cuda::transform_iterator(cuda::permutation_iterator(match_offsets.begin(), nonzero_matches.begin()),
+      cuda::proclaim_return_type<rmm::device_uvector<size_type>::iterator>(
+        [larger_indices = larger_indices.begin()] __device__(auto val) { return larger_indices + val; }));
+  auto sizes = cuda::permutation_iterator(match_counts->begin(), nonzero_matches.begin());
+
+  size_t temp_storage_bytes = 0;
+  cub::DeviceCopy::Batched(nullptr, temp_storage_bytes, input_iterators, output_iterators, sizes, nonzero_matches.size(), stream.value());
+  rmm::device_buffer temp_storage(temp_storage_bytes, stream, mr);
+  cub::DeviceCopy::Batched(temp_storage.data(), temp_storage_bytes, input_iterators, output_iterators, sizes, nonzero_matches.size(), stream.value());
 
   // populate smaller indices
   rmm::device_uvector<size_type> smaller_indices(total_matches, stream, mr);
@@ -210,10 +233,10 @@ merge<LargerIterator, SmallerIterator>::operator()(rmm::cuda_stream_view stream,
 
   auto smaller_tabulate_it = thrust::tabulate_output_iterator(
     [nonzero_matches = nonzero_matches.begin(),
-     match_counts    = match_counts->begin(),
+     match_offsets    = match_offsets.begin(),
      smaller_indices = smaller_indices.begin()] __device__(auto idx, auto lb) {
       auto const lhs_idx   = nonzero_matches[idx];
-      auto const pos       = match_counts[lhs_idx];
+      auto const pos       = match_offsets[lhs_idx];
       smaller_indices[pos] = lb;
     });
   auto smaller_it = thrust::transform_iterator(
