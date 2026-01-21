@@ -18,7 +18,8 @@ echo "unset PROMPT_COMMAND" >>~/.bashrc
 
 # Path to the encrypted token file
 ENCRYPTED_TOKEN_FILE="/home/coder/.oneapi-perflab-nvidia.key.gpg"
-TOKEN_ENV_VAR_NAMES=("PERFLAB_LLM_APIKEY" "ANTHROPIC_AUTH_TOKEN" "AZURE_OPENAI_API_KEY")
+# TOKEN_ENV_VAR_NAMES=("PERFLAB_LLM_APIKEY" "ANTHROPIC_AUTH_TOKEN" "AZURE_OPENAI_API_KEY")
+TOKEN_ENV_VAR_NAMES=("AZURE_OPENAI_API_KEY")
 
 # Function to decrypt token and add to bashrc
 setup_token() {
@@ -52,11 +53,11 @@ setup_token
 
 # Configure Claude Code with both Claude and OpenAI models
 # Set Base URL to OneAPI Anthropic API Endpoint
-echo 'export ANTHROPIC_BASE_URL=https://llm-proxy.perflab.nvidia.com/anthropic' >>~/.bashrc
+# echo 'export ANTHROPIC_BASE_URL=https://llm-proxy.perflab.nvidia.com/anthropic' >>~/.bashrc
 # Set the model you want to use
-echo 'export ANTHROPIC_MODEL=claude-3-7-sonnet-20250219' >>~/.bashrc
+# echo 'export ANTHROPIC_MODEL=claude-3-7-sonnet-20250219' >>~/.bashrc
 # Set the small model for background tasks
-echo 'export ANTHROPIC_SMALL_FAST_MODEL=model-router' >>~/.bashrc
+# echo 'export ANTHROPIC_SMALL_FAST_MODEL=model-router' >>~/.bashrc
 
 # Neovim config home
 echo 'export XDG_CONFIG_HOME=/home/coder/.config' >>~/.bashrc
@@ -71,5 +72,8 @@ IdentityFile ~/.ssh/github
 IdentitiesOnly yes
 EOF
 
-# Goose
-curl -fsSL https://github.com/block/goose/releases/download/v1.7.0/download_cli.sh | bash
+echo "Installing claude code"
+curl -fsSL https://claude.ai/install.sh | bash
+echo "Installing goose"
+curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash
+

@@ -37,19 +37,6 @@ DEBIAN_FRONTEND=noninteractive apt install -y pipx
 #echo "Pipx installing vectorcode"
 #pipx install vectorcode --python python3.12
 
-echo "Installing nodejs 22"
-mkdir -p /home/coder/node22
-mkdir -p /home/coder/node22/node22
-wget -P /home/coder/node22 https://nodejs.org/dist/v22.17.1/node-v22.17.1-linux-x64.tar.xz
-tar -xJf /home/coder/node22/node-v22.17.1-linux-x64.tar.xz -C /home/coder/node22/node22 --strip-components=1
-ln -s /home/coder/node22/node22/bin/node /usr/local/bin/node
-ln -s /home/coder/node22/node22/bin/npm /usr/local/bin/npm
-
-#echo "Installing claude code"
-npm install -g @anthropic-ai/claude-code
-ln -s /home/coder/node22/node22/bin/claude /usr/local/bin/claude
-#curl -fsSL claude.ai/install.sh | bash
-
 echo "Installing neovim"
 mkdir -p /home/coder/neovim
 wget -P /home/coder/neovim https://github.com/neovim/neovim/releases/download/v0.11.3/nvim-linux-x86_64.appimage
