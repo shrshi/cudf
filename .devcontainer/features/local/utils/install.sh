@@ -27,9 +27,9 @@ echo "Installing essentials"
 DEBIAN_FRONTEND=noninteractive apt update
 DEBIAN_FRONTEND=noninteractive apt install -y file wget git build-essential gcc g++ gdb cmake make ninja-build curl openssh-client openssh-server
 
-echo "Installing ripgrep and fd"
+echo "Installing ripgrep and fd and jq"
 DEBIAN_FRONTEND=noninteractive apt update
-DEBIAN_FRONTEND=noninteractive apt install -y ripgrep fd-find
+DEBIAN_FRONTEND=noninteractive apt install -y ripgrep fd-find jq
 
 echo "Installing pipx"
 DEBIAN_FRONTEND=noninteractive apt update
