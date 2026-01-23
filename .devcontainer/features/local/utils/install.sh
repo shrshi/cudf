@@ -79,3 +79,6 @@ temp_deb="(mktemp)" && \
   wget -O "$temp_deb" https://developer.nvidia.com/downloads/assets/tools/secure/nsight-systems/2024_6/NsightSystems-linux-cli-public-2024.6.1.90-3490548.deb && \
    dpkg -i "$temp_deb" && \
   rm -f "$temp_deb"
+
+echo "Installing packages for claude code sandbox"
+DEBIAN_FRONTEND=noninteractive apt install -y socat bubblewrap
