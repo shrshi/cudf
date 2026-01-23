@@ -14,6 +14,7 @@
     "${localEnv:USER:anon}-rapids-${localWorkspaceFolderBasename}-26.04-cuda12.9-conda",
     "--ulimit",
     "nofile=500000",
+    // Required for Claude Code sandboxing to work inside devcontainers
     "--cap-add=SYS_ADMIN",
     "--security-opt=apparmor=unconfined"
   ],

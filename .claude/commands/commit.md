@@ -7,9 +7,5 @@ model: haiku
 
 # Commit Changes
 
-<git_diff>
-!`git diff --cached`
-</git_diff>
-
 Create a commit message following Conventional Commits.
 If $ARGUMENTS is provided, use it as the commit message.
