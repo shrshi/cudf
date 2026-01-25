@@ -8,7 +8,7 @@ model: haiku
 # Commit Changes
 
 <git_diff>
-!`git diff --cached`
+`git diff --cached`
 </git_diff>
 
 Create a commit message following Conventional Commits.

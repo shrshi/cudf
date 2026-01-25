@@ -10,15 +10,15 @@ model: haiku
 ## Context
 
 <git_status>
-!`git status`
+`git status`
 </git_status>
 
 <current_branch>
-!`git branch --show-current`
+`git branch --show-current`
 </current_branch>
 
 <recent_branches>
-!`git branch --sort=-committerdate | head -5`
+`git branch --sort=-committerdate | head -5`
 </recent_branches>
 
 ## Task Description
