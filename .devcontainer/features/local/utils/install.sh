@@ -81,4 +81,5 @@ temp_deb="(mktemp)" && \
   rm -f "$temp_deb"
 
 echo "Installing packages for claude code sandbox"
-DEBIAN_FRONTEND=noninteractive apt install -y socat bubblewrap
+DEBIAN_FRONTEND=noninteractive apt install -y bubblewrap
+DEBIAN_FRONTEND=noninteractive apt install -y socat

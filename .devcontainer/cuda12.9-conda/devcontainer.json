@@ -72,6 +72,7 @@
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/nvim/init.lua,target=/home/coder/.config/nvim/init.lua,type=bind",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/nvim/lua,target=/home/coder/.config/nvim/lua,type=bind",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.tmux.conf,target=/home/coder/.tmux.conf,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/dotfiles/.claude,target=/home/coder/.claude,type=bind",
     "source=${localWorkspaceFolder}/.oneapi-perflab-nvidia.key.gpg,target=/home/coder/.oneapi-perflab-nvidia.key.gpg,type=bind"
   ],
   "customizations": {
