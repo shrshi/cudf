@@ -8,8 +8,8 @@ echo "Copying post create script"
 # Copy script to a standard location
 # Check if source file exists before copying
 if [ -f post-create.sh ]; then
-     cp post-create.sh /usr/local/bin/local-feature-utils-post-create
-     chmod +x /usr/local/bin/local-feature-utils-post-create
+    cp post-create.sh /usr/local/bin/local-feature-utils-post-create
+    chmod +x /usr/local/bin/local-feature-utils-post-create
     echo "Successfully copied post-create.sh"
 else
     echo "Warning: post-create.sh not found"
@@ -23,29 +23,39 @@ else
     exit 1
 fi
 
+ARCH=$(uname -m)
+
 echo "Installing essentials"
 DEBIAN_FRONTEND=noninteractive apt update
 DEBIAN_FRONTEND=noninteractive apt install -y file wget git build-essential gcc g++ gdb cmake make ninja-build curl openssh-client openssh-server
 
 echo "Installing ripgrep and fd and jq"
-DEBIAN_FRONTEND=noninteractive apt update
 DEBIAN_FRONTEND=noninteractive apt install -y ripgrep fd-find jq
 
 echo "Installing pipx"
-DEBIAN_FRONTEND=noninteractive apt update
 DEBIAN_FRONTEND=noninteractive apt install -y pipx
 #echo "Pipx installing vectorcode"
 #pipx install vectorcode --python python3.12
 
 echo "Installing neovim"
 mkdir -p /home/coder/neovim
-wget -P /home/coder/neovim https://github.com/neovim/neovim/releases/download/v0.11.3/nvim-linux-x86_64.appimage
-cd /home/coder/neovim
-chmod u+x nvim-linux-x86_64.appimage
-./nvim-linux-x86_64.appimage --appimage-extract
-cd /usr/local/bin
- ln -s /home/coder/neovim/squashfs-root/usr/bin/nvim .
-cd
+if [[ $(uname -m) == "x86_64" ]]; then
+    wget -P /home/coder/neovim https://github.com/neovim/neovim/releases/download/v0.11.6/nvim-linux-x86_64.appimage
+    cd /home/coder/neovim
+    chmod u+x nvim-linux-x86_64.appimage
+    ./nvim-linux-x86_64.appimage --appimage-extract
+    cd /usr/local/bin
+    ln -s /home/coder/neovim/squashfs-root/usr/bin/nvim .
+    cd
+elif [[ $(uname -m) == "aarch64" ]]; then
+    wget -P /home/coder/neovim https://github.com/neovim/neovim/releases/download/v0.11.6/nvim-linux-arm64.appimage
+    cd /home/coder/neovim
+    chmod u+x nvim-linux-arm64.appimage
+    ./nvim-linux-arm64.appimage --appimage-extract
+    cd /usr/local/bin
+    ln -s /home/coder/neovim/squashfs-root/usr/bin/nvim .
+    cd
+fi
 
 echo "Installing tmux"
 DEBIAN_FRONTEND=noninteractive apt install -y tmux
@@ -83,3 +93,6 @@ temp_deb="(mktemp)" && \
 echo "Installing packages for claude code sandbox"
 DEBIAN_FRONTEND=noninteractive apt install -y bubblewrap
 DEBIAN_FRONTEND=noninteractive apt install -y socat
+
+echo "Bash auto completion"
+DEBIAN_FRONTEND=noninteractive apt install -y bash-completion

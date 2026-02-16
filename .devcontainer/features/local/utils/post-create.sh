@@ -68,12 +68,19 @@ cat >~/.ssh/config <<EOF
 Host github.com
 HostName github.com
 User git
-IdentityFile ~/.ssh/github
+IdentityFile /home/coder/.ssh/github
 IdentitiesOnly yes
 EOF
 
 echo "Installing claude code"
 curl -fsSL https://claude.ai/install.sh | bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >>~/.bashrc
 echo "Installing goose"
 curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash
 
+echo "Enable bash completion"
+cat >>/home/coder/.bashrc <<EOF
+if [ -f /etc/bash_completion ]; then
+    . /etc/bash_completion
+fi
+EOF
