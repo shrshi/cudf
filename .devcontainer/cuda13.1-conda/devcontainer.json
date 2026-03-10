@@ -74,6 +74,13 @@
     "source=${localWorkspaceFolder}/.oneapi-perflab-nvidia.key.gpg,target=/home/coder/.oneapi-perflab-nvidia.key.gpg,type=bind,readonly",
     "source=${localWorkspaceFolder}/.inference-nvidia.key.gpg,target=/home/coder/.inference-nvidia.key.gpg,type=bind,readonly"
   ],
+  "containerEnv": {
+    "OPENCODE_CONFIG_DIR": "/home/coder/.opencode",
+    "OPENCODE_EXPERIMENTAL": "1",
+    "OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT": "0",
+    "OPENCODE_ENABLE_EXA": "1",
+    "OPENCODE_DISABLE_CLAUDE_CODE": "1"
+  },
   "customizations": {
     "vscode": {
       "extensions": [

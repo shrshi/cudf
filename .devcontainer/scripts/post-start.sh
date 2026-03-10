@@ -18,7 +18,6 @@ git config --global --add safe.directory /home/coder/cudf
 # Bashrc modifications (idempotent - check before append)
 grep -q "unset PROMPT_COMMAND" ~/.bashrc || echo "unset PROMPT_COMMAND" >>~/.bashrc
 grep -q "XDG_CONFIG_HOME" ~/.bashrc || echo 'export XDG_CONFIG_HOME=/home/coder/.config' >>~/.bashrc
-grep -q "OPENCODE_CONFIG_DIR" ~/.bashrc || echo 'export OPENCODE_CONFIG_DIR=/home/coder/.opencode' >>~/.bashrc
 
 # Bash completion (idempotent)
 if ! grep -q "/etc/bash_completion" ~/.bashrc; then
