@@ -59,3 +59,6 @@ ENV SCCACHE_DIST_URL="https://${TARGETARCH}.linux.sccache.rapids.nvidia.com"
 # Build as much in parallel as possible
 ENV INFER_NUM_DEVICE_ARCHITECTURES=1
 ENV MAX_DEVICE_OBJ_TO_COMPILE_IN_PARALLEL=20
+
+RUN mkdir -p /home/coder/.config/nvim && \
+    chown -R coder:coder /home/coder/.config

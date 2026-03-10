@@ -13,10 +13,7 @@
     "--name",
     "${localEnv:USER:anon}-rapids-${localWorkspaceFolderBasename}-26.04-cuda12.9-conda",
     "--ulimit",
-    "nofile=500000",
-    // Required for Claude Code sandboxing to work inside devcontainers
-    "--cap-add=SYS_ADMIN",
-    "--security-opt=apparmor=unconfined"
+    "nofile=500000"
   ],
   "hostRequirements": {
     "gpu": "optional"
@@ -55,6 +52,7 @@
     "-c",
     "mkdir -m 0755 -p ${localWorkspaceFolder}/../.{aws,cache,config,conda/pkgs,conda/${localWorkspaceFolderBasename}-cuda12.9-envs}"
   ],
+  "postStartCommand": "/home/coder/cudf/.devcontainer/scripts/post-start.sh",
   "postAttachCommand": [
     "/bin/bash",
     "-c",
@@ -69,11 +67,12 @@
     "source=${localWorkspaceFolder}/../.conda/pkgs,target=/home/coder/.conda/pkgs,type=bind,consistency=consistent",
     "source=${localWorkspaceFolder}/../.conda/${localWorkspaceFolderBasename}-cuda12.9-envs,target=/home/coder/.conda/envs,type=bind,consistency=consistent",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/coder/.ssh,type=bind",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/nvim/init.lua,target=/home/coder/.config/nvim/init.lua,type=bind",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.config/nvim/lua,target=/home/coder/.config/nvim/lua,type=bind",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.tmux.conf,target=/home/coder/.tmux.conf,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/dotfiles/init.lua,target=/home/coder/.config/nvim/init.lua,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/dotfiles/lua,target=/home/coder/.config/nvim/lua,type=bind",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/dotfiles/.opencode,target=/home/coder/.opencode,type=bind",
     "source=${localEnv:HOME}${localEnv:USERPROFILE}/dotfiles/.claude,target=/home/coder/.claude,type=bind",
-    "source=${localWorkspaceFolder}/.oneapi-perflab-nvidia.key.gpg,target=/home/coder/.oneapi-perflab-nvidia.key.gpg,type=bind"
+    "source=${localWorkspaceFolder}/.oneapi-perflab-nvidia.key.gpg,target=/home/coder/.oneapi-perflab-nvidia.key.gpg,type=bind,readonly",
+    "source=${localWorkspaceFolder}/.inference-nvidia.key.gpg,target=/home/coder/.inference-nvidia.key.gpg,type=bind,readonly"
   ],
   "customizations": {
     "vscode": {

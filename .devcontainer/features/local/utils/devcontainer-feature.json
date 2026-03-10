@@ -2,6 +2,5 @@
   "name": "Install various useful utilities",
   "id": "utils",
   "version": "0.alpha",
-  "description": "A feature to install commandline utilities",
-  "postCreateCommand": "/usr/local/bin/local-feature-utils-post-create"
+  "description": "A feature to install commandline utilities"
 }
