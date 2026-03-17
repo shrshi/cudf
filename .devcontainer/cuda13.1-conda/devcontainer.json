@@ -79,7 +79,9 @@
     "OPENCODE_EXPERIMENTAL": "1",
     "OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT": "0",
     "OPENCODE_ENABLE_EXA": "1",
-    "OPENCODE_DISABLE_CLAUDE_CODE": "1"
+    "OPENCODE_DISABLE_CLAUDE_CODE": "1",
+    "PROMPT_COMMAND": "",
+    "XDG_CONFIG_HOME": "/home/coder/.config"
   },
   "customizations": {
     "vscode": {
