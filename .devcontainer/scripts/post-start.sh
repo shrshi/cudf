@@ -15,10 +15,6 @@ git config --global tag.gpgsign true
 git config --global merge.gpgsign true
 git config --global --add safe.directory /home/coder/cudf
 
-# Bashrc modifications (idempotent - check before append)
-grep -q "unset PROMPT_COMMAND" ~/.bashrc || echo "unset PROMPT_COMMAND" >>~/.bashrc
-grep -q "XDG_CONFIG_HOME" ~/.bashrc || echo 'export XDG_CONFIG_HOME=/home/coder/.config' >>~/.bashrc
-
 # Bash completion (idempotent)
 if ! grep -q "/etc/bash_completion" ~/.bashrc; then
   cat >>~/.bashrc <<'EOF'
@@ -110,8 +106,9 @@ if [ ! -d /home/coder/tmux-config ]; then
 EOF
   patch /home/coder/tmux-config/tmux/tmux.conf /home/coder/tmux-config/tmux/tmux-conf.patch
   /home/coder/tmux-config/install.sh
-  # Enable clipboard
+  # Enable clipboard and passthrough
   sed -i '/^set -g mouse on/a set -g set-clipboard on' /home/coder/tmux-config/tmux/tmux.conf
+  sed -i '/^set -g set-clipboard on/a set -g allow-passthrough on' /home/coder/tmux-config/tmux/tmux.conf
   sed -i 's/^set -g default-terminal.*/set -g default-terminal "tmux-256color"/' /home/coder/tmux-config/tmux/tmux.conf
   sed -i '/^set -g default-terminal/a set -ga terminal-overrides ",xterm-256color:Tc,tmux-256color:Tc"' /home/coder/tmux-config/tmux/tmux.conf
   sed -i '/^set -ga terminal-overrides/a set -gq utf8 on' /home/coder/tmux-config/tmux/tmux.conf

@@ -15,6 +15,12 @@ sudo DEBIAN_FRONTEND=noninteractive apt install -y ripgrep fd-find jq
 
 echo "Installing pipx"
 sudo DEBIAN_FRONTEND=noninteractive apt install -y pipx
+
+echo "Installing pre-commit"
+if ! command -v pre-commit &> /dev/null; then
+    pipx install pre-commit
+    pipx ensurepath
+fi
 #echo "Pipx installing vectorcode"
 #pipx install vectorcode --python python3.12
 
@@ -69,6 +75,13 @@ sudo DEBIAN_FRONTEND=noninteractive apt install -y nodejs
 
 echo "Installing opencode"
 sudo npm install -g opencode-ai
+
+echo "Installing GitHub CLI (gh)"
+if ! command -v gh &> /dev/null; then
+    GH_VERSION="2.88.0"
+    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar -xz -C /usr/local
+    ln -sf "/usr/local/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
+fi
 
 # Clean up apt cache to reduce image size
 rm -rf /var/lib/apt/lists/*
