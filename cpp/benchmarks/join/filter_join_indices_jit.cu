@@ -17,6 +17,16 @@
 
 #include <nvbench/nvbench.cuh>
 
+/**
+ * @brief Benchmark comparing AST interpreter vs JIT compilation for filter_join_indices.
+ *
+ * Both methods use the same AST expression, allowing fair comparison of:
+ * - AST: Runtime tree traversal and interpretation
+ * - JIT: One-time compilation to fused CUDA kernel
+ *
+ * The ast_levels parameter controls expression tree depth, measuring how each
+ * approach scales with predicate complexity.
+ */
 template <typename JoinFunc>
 void filter_join_indices_benchmark(nvbench::state& state,
                                    JoinFunc join_func,
@@ -24,6 +34,8 @@ void filter_join_indices_benchmark(nvbench::state& state,
 {
   auto const build_size = static_cast<cudf::size_type>(state.get_int64("build_size"));
   auto const probe_size = static_cast<cudf::size_type>(state.get_int64("probe_size"));
+  auto const ast_levels = static_cast<cudf::size_type>(state.get_int64("ast_levels"));
+  auto const method     = state.get_string("method");
 
   // Generate build (right) and probe (left) tables
   // 1 key column + 2 payload columns = 3 columns total
@@ -42,44 +54,33 @@ void filter_join_indices_benchmark(nvbench::state& state,
   cudf::device_span<cudf::size_type const> left_span{left_indices->data(), left_indices->size()};
   cudf::device_span<cudf::size_type const> right_span{right_indices->data(), right_indices->size()};
 
-  state.set_cuda_stream(nvbench::make_cuda_stream_view(cudf::get_default_stream().value()));
-
-  auto const method = state.get_string("method");
+  // Build AST expression tree
+  cudf::ast::tree tree;
+  create_complex_ast_expression(tree, ast_levels);
 
   auto const join_input_size = estimate_size(build_keys) + estimate_size(probe_keys);
   auto const filter_input_size =
     join_input_size + (left_indices->size() + right_indices->size()) * sizeof(cudf::size_type);
-  state.add_element_count(filter_input_size, "filter_input_size");  // number of bytes
+  state.add_element_count(filter_input_size, "filter_input_size");
   state.template add_global_memory_reads<nvbench::int8_t>(filter_input_size);
 
-  if (method == "AST") {
-    auto col_ref_left_1  = cudf::ast::column_reference(1, cudf::ast::table_reference::LEFT);
-    auto col_ref_right_1 = cudf::ast::column_reference(1, cudf::ast::table_reference::RIGHT);
-    auto predicate =
-      cudf::ast::operation(cudf::ast::ast_operator::GREATER, col_ref_left_1, col_ref_right_1);
+  state.set_cuda_stream(nvbench::make_cuda_stream_view(cudf::get_default_stream().value()));
 
-    state.exec(nvbench::exec_tag::sync, [&](nvbench::launch& launch) {
+  if (method == "AST") {
+    state.exec(nvbench::exec_tag::sync, [&](nvbench::launch&) {
       auto result = cudf::filter_join_indices(
-        probe_table->view(), build_table->view(), left_span, right_span, predicate, join_kind);
+        probe_table->view(), build_table->view(), left_span, right_span, tree.back(), join_kind);
     });
   } else {
-    std::string predicate_code = R"(
-      __device__ void predicate(bool* output,
-                                int32_t left_col0, int32_t left_col1, int32_t left_col2,
-                                int32_t right_col0, int32_t right_col1, int32_t right_col2) {
-        *output = left_col1 > right_col1;
-      }
-    )";
-
-    state.exec(nvbench::exec_tag::sync, [&](nvbench::launch& launch) {
+    state.exec(nvbench::exec_tag::sync, [&](nvbench::launch&) {
       auto result = cudf::filter_join_indices_jit(
-        probe_table->view(), build_table->view(), left_span, right_span, predicate_code, join_kind);
+        probe_table->view(), build_table->view(), left_span, right_span, tree.back(), join_kind);
     });
   }
   set_throughputs(state);
 }
 
-void filter_join_indices_inner_join(nvbench::state& state)
+void filter_join_indices_jit_inner_join(nvbench::state& state)
 {
   filter_join_indices_benchmark(
     state,
@@ -89,7 +90,7 @@ void filter_join_indices_inner_join(nvbench::state& state)
     cudf::join_kind::INNER_JOIN);
 }
 
-void filter_join_indices_left_join(nvbench::state& state)
+void filter_join_indices_jit_left_join(nvbench::state& state)
 {
   filter_join_indices_benchmark(
     state,
@@ -99,14 +100,16 @@ void filter_join_indices_left_join(nvbench::state& state)
     cudf::join_kind::LEFT_JOIN);
 }
 
-NVBENCH_BENCH(filter_join_indices_inner_join)
-  .set_name("filter_join_indices_inner")
+NVBENCH_BENCH(filter_join_indices_jit_inner_join)
+  .set_name("filter_join_indices_jit_inner")
   .add_string_axis("method", {"AST", "JIT"})
-  .add_int64_axis("build_size", JOIN_SIZE_RANGE)
-  .add_int64_axis("probe_size", JOIN_SIZE_RANGE);
+  .add_int64_axis("ast_levels", {1, 5, 10})
+  .add_int64_power_of_two_axis("build_size", nvbench::range(12, 24, 2))
+  .add_int64_power_of_two_axis("probe_size", nvbench::range(12, 24, 2));
 
-NVBENCH_BENCH(filter_join_indices_left_join)
-  .set_name("filter_join_indices_left")
+NVBENCH_BENCH(filter_join_indices_jit_left_join)
+  .set_name("filter_join_indices_jit_left")
   .add_string_axis("method", {"AST", "JIT"})
-  .add_int64_axis("build_size", JOIN_SIZE_RANGE)
-  .add_int64_axis("probe_size", JOIN_SIZE_RANGE);
+  .add_int64_axis("ast_levels", {1, 5, 10})
+  .add_int64_power_of_two_axis("build_size", nvbench::range(12, 24, 2))
+  .add_int64_power_of_two_axis("probe_size", nvbench::range(12, 24, 2));
