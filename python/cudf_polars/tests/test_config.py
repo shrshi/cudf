@@ -30,10 +30,16 @@ from cudf_polars.testing.asserts import (
 from cudf_polars.utils.config import (
     CUDAStreamPolicy,
     CUDAStreamPoolConfig,
+    Cluster,
     ConfigOptions,
     MemoryResourceConfig,
+    StreamingExecutor,
 )
-from cudf_polars.utils.cuda_stream import get_cuda_stream, get_new_cuda_stream
+from cudf_polars.utils.cuda_stream import (
+    get_cuda_stream,
+    get_dask_cuda_stream,
+    get_new_cuda_stream,
+)
 
 
 @pytest.fixture(params=[False, True], ids=["norapidsmpf.single", "rapidsmpf.single"])
@@ -414,25 +420,6 @@ def test_validate_shuffle_method_defaults(
         )
 
 
-def test_validate_shuffle_insertion_method() -> None:
-    config = ConfigOptions.from_polars_engine(
-        pl.GPUEngine(
-            executor="streaming",
-            executor_options={"shuffler_insertion_method": "concat_insert"},
-        )
-    )
-    assert config.executor.name == "streaming"
-    assert config.executor.shuffler_insertion_method == "concat_insert"
-
-    with pytest.raises(ValueError, match="is not a valid ShufflerInsertionMethod"):
-        ConfigOptions.from_polars_engine(
-            pl.GPUEngine(
-                executor="streaming",
-                executor_options={"shuffler_insertion_method": object()},
-            )
-        )
-
-
 @pytest.mark.parametrize(
     "option",
     [
@@ -515,7 +502,6 @@ def test_config_option_from_env(
         m.setenv("CUDF_POLARS__EXECUTOR__RAPIDSMPF_SPILL", "1")
         m.setenv("CUDF_POLARS__EXECUTOR__SINK_TO_DIRECTORY", "1")
         m.setenv("CUDF_POLARS__CUDA_STREAM_POLICY", "new")
-        m.setenv("CUDF_POLARS__EXECUTOR__SHUFFLER_INSERTION_METHOD", "concat_insert")
 
         if rapidsmpf_distributed_available:
             m.setenv("CUDF_POLARS__EXECUTOR__SHUFFLE_METHOD", "rapidsmpf")
@@ -535,7 +521,6 @@ def test_config_option_from_env(
         assert config.executor.rapidsmpf_spill is True
         assert config.executor.sink_to_directory is True
         assert config.cuda_stream_policy == CUDAStreamPolicy.NEW
-        assert config.executor.shuffler_insertion_method == "concat_insert"
 
         if rapidsmpf_distributed_available:
             assert config.executor.shuffle_method == "rapidsmpf"
@@ -882,26 +867,6 @@ def test_validate_cuda_stream_policy() -> None:
         ConfigOptions.from_polars_engine(pl.GPUEngine(cuda_stream_policy="foo"))
 
 
-@pytest.mark.parametrize(
-    "option",
-    [
-        "use_io_partitioning",
-        "use_reduction_planning",
-        "use_join_heuristics",
-        "use_sampling",
-        "default_selectivity",
-    ],
-)
-def test_validate_stats_planning(option: str) -> None:
-    with pytest.raises(TypeError, match=f"{option} must be"):
-        ConfigOptions.from_polars_engine(
-            pl.GPUEngine(
-                executor="streaming",
-                executor_options={"stats_planning": {option: object()}},
-            )
-        )
-
-
 def test_validate_dynamic_planning() -> None:
     with pytest.raises(TypeError, match="sample_chunk_count must be"):
         ConfigOptions.from_polars_engine(
@@ -1025,3 +990,15 @@ def test_rapidsmpf_py_executor_max_workers_from_env(
         config = ConfigOptions.from_polars_engine(engine)
         assert config.executor.name == "streaming"
         assert config.executor.rapidsmpf_py_executor_max_workers == 8
+
+
+def test_distributed_sink_to_directory_false_raises() -> None:
+    with pytest.raises(
+        ValueError, match="The distributed cluster requires sink_to_directory=True"
+    ):
+        StreamingExecutor(cluster=Cluster.DISTRIBUTED, sink_to_directory=False)
+
+
+def test_get_dask_cuda_stream() -> None:
+    stream = get_dask_cuda_stream()
+    assert stream is not None
