@@ -8,7 +8,7 @@ ARCH=$(uname -m)
 
 echo "Installing essentials"
 sudo DEBIAN_FRONTEND=noninteractive apt update
-sudo DEBIAN_FRONTEND=noninteractive apt install -y file wget git build-essential gcc g++ gdb cmake make ninja-build curl openssh-client openssh-server
+sudo DEBIAN_FRONTEND=noninteractive apt install -y file wget git build-essential gcc g++ gdb cmake make ninja-build curl openssh-client openssh-server patch
 
 echo "Installing ripgrep and fd and jq"
 sudo DEBIAN_FRONTEND=noninteractive apt install -y ripgrep fd-find jq
