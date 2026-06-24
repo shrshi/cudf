@@ -1,16 +1,12 @@
 name: pr
-
 on:
   push:
     branches:
       - "pull-request/[0-9]+"
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 permissions: {}
-
 jobs:
   # Please keep pr-builder as the top job here
   pr-builder:
@@ -18,6 +14,7 @@ jobs:
       - check-nightly-ci
       - changed-files
       - checks
+      - cmake-tests
       - conda-cpp-build
       - cpp-linters
       - conda-cpp-checks
@@ -30,6 +27,9 @@ jobs:
       - conda-notebook-tests
       - docs-build
       - wheel-build-libcudf
+      - wheel-build-libcudf-streaming
+      - wheel-build-cudf-streaming
+      - wheel-tests-cudf-streaming
       - wheel-build-pylibcudf
       - wheel-build-cudf
       - wheel-tests-cudf
@@ -115,6 +115,7 @@ jobs:
           - '!ci/test_*.sh'
           - '!ci/validate_wheel.sh'
           - '!codecov.yml'
+          - '!SECURITY.md'
         test_cpp:
           - '**'
           - '!**/REVIEW_GUIDELINES.md'
@@ -135,6 +136,7 @@ jobs:
           - '!.pre-commit-config.yaml'
           - '!CONTRIBUTING.md'
           - '!README.md'
+          - '!SECURITY.md'
           - '!ci/cudf_pandas_scripts/**'
           - '!ci/build_docs.sh'
           - '!ci/build_python*.sh'
@@ -171,6 +173,7 @@ jobs:
           - '!.pre-commit-config.yaml'
           - '!CONTRIBUTING.md'
           - '!README.md'
+          - '!SECURITY.md'
           - '!ci/release/update-version.sh'
           - '!ci/test_java.sh'
           - '!ci/validate_wheel.sh'
@@ -199,6 +202,7 @@ jobs:
           - '!.pre-commit-config.yaml'
           - '!CONTRIBUTING.md'
           - '!README.md'
+          - '!SECURITY.md'
           - '!ci/build_docs.sh'
           - '!ci/build_wheel*.sh'
           - '!ci/check_style.sh'
@@ -233,6 +237,7 @@ jobs:
           - '!.pre-commit-config.yaml'
           - '!CONTRIBUTING.md'
           - '!README.md'
+          - '!SECURITY.md'
           - '!ci/build_wheel*.sh'
           - '!ci/cudf_pandas_scripts/**'
           - '!ci/release/update-version.sh'
@@ -261,6 +266,7 @@ jobs:
           - '!.pre-commit-config.yaml'
           - '!CONTRIBUTING.md'
           - '!README.md'
+          - '!SECURITY.md'
           - '!ci/build_docs.sh'
           - '!ci/build_wheel*.sh'
           - '!ci/check_style.sh'
@@ -294,6 +300,7 @@ jobs:
           - '!.pre-commit-config.yaml'
           - '!CONTRIBUTING.md'
           - '!README.md'
+          - '!SECURITY.md'
           - '!ci/build_cpp.sh'
           - '!ci/build_docs.sh'
           - '!ci/build_python_noarch.sh'
@@ -331,7 +338,6 @@ jobs:
           - '!cpp/**'
           - '!python/cudf_polars/**'
           - '!python/dask_cudf/**'
-
   checks:
     permissions:
       contents: read
@@ -339,7 +345,7 @@ jobs:
     uses: rapidsai/shared-workflows/.github/workflows/checks.yaml@main
     with:
       enable_check_generated_files: false
-      ignored_pr_jobs: "telemetry-summarize spark-rapids-jni wheel-tests-cudf-polars-with-rapidsmpf"
+      ignored_pr_jobs: "telemetry-summarize spark-rapids-jni cuml-compat-tests"
   conda-cpp-build:
     needs: checks
     permissions:
@@ -354,6 +360,22 @@ jobs:
       build_type: pull-request
       node_type: cpu16
       script: ci/build_cpp.sh
+  cmake-tests:
+    needs: checks
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      packages: read
+      pull-requests: read
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+    uses: rapidsai/shared-workflows/.github/workflows/custom-job.yaml@main
+    with:
+      build_type: pull-request
+      node_type: cpu16
+      arch: "amd64"
+      container_image: "rapidsai/ci-conda:26.08-latest"
+      script: "ci/test_cmake.sh"
   cpp-linters:
     permissions:
       actions: read
@@ -378,6 +400,7 @@ jobs:
     uses: rapidsai/shared-workflows/.github/workflows/conda-cpp-post-build-checks.yaml@main
     with:
       build_type: pull-request
+      package_name: libcudf
   conda-cpp-tests:
     needs: [conda-cpp-build, changed-files]
     permissions:
@@ -467,7 +490,7 @@ jobs:
       build_type: pull-request
       node_type: "gpu-l4-latest-1"
       arch: "amd64"
-      container_image: "rapidsai/ci-conda:26.06-latest"
+      container_image: "rapidsai/ci-conda:26.08-latest"
       script: "ci/test_java.sh"
   conda-notebook-tests:
     needs: [conda-python-build, conda-python-build-noarch, changed-files]
@@ -484,7 +507,7 @@ jobs:
       build_type: pull-request
       node_type: "gpu-l4-latest-1"
       arch: "amd64"
-      container_image: "rapidsai/ci-conda:26.06-latest"
+      container_image: "rapidsai/ci-conda:26.08-latest"
       script: "ci/test_notebooks.sh"
   docs-build:
     needs: [conda-python-build, conda-python-build-noarch, changed-files]
@@ -501,7 +524,7 @@ jobs:
       build_type: pull-request
       node_type: "gpu-l4-latest-1"
       arch: "amd64"
-      container_image: "rapidsai/ci-conda:26.06-latest"
+      container_image: "rapidsai/ci-conda:26.08-latest"
       script: "ci/build_docs.sh"
   wheel-build-libcudf:
     needs: checks
@@ -521,6 +544,56 @@ jobs:
       script: "ci/build_wheel_libcudf.sh"
       package-name: libcudf
       package-type: cpp
+  wheel-build-libcudf-streaming:
+    needs: [checks, wheel-build-libcudf]
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      packages: read
+      pull-requests: read
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+    uses: rapidsai/shared-workflows/.github/workflows/wheels-build.yaml@main
+    with:
+      # build for every combination of arch and CUDA version, but only for the latest Python
+      matrix_filter: group_by([.ARCH, (.CUDA_VER|split(".")|map(tonumber)|.[0])]) | map(max_by(.PY_VER|split(".")|map(tonumber)))
+      build_type: pull-request
+      node_type: cpu16
+      script: "ci/build_wheel_libcudf_streaming.sh"
+      package-name: libcudf_streaming
+      package-type: cpp
+  wheel-build-cudf-streaming:
+    needs: [checks, wheel-build-libcudf-streaming, wheel-build-pylibcudf]
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      packages: read
+      pull-requests: read
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+    uses: rapidsai/shared-workflows/.github/workflows/wheels-build.yaml@main
+    with:
+      # Build a wheel for each CUDA x ARCH x minimum supported Python version
+      matrix_filter: group_by({CUDA_VER, ARCH}) | map(min_by(.PY_VER | split(".") | map(tonumber)))
+      build_type: pull-request
+      node_type: cpu16
+      script: "ci/build_wheel_cudf_streaming.sh"
+      package-name: cudf_streaming
+      package-type: python
+  wheel-tests-cudf-streaming:
+    needs: [wheel-build-cudf-streaming, changed-files]
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      packages: read
+      pull-requests: read
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+    uses: rapidsai/shared-workflows/.github/workflows/wheels-test.yaml@main
+    if: fromJSON(needs.changed-files.outputs.changed_file_groups).test_python_wheels
+    with:
+      build_type: pull-request
+      script: ci/test_wheel_cudf_streaming.sh
   wheel-build-pylibcudf:
     needs: [checks, wheel-build-libcudf]
     permissions:
@@ -591,7 +664,7 @@ jobs:
       package-type: python
       pure-wheel: true
   wheel-tests-cudf-polars:
-    needs: [wheel-build-cudf-polars, changed-files]
+    needs: [wheel-build-cudf-polars, wheel-build-cudf-streaming, changed-files]
     permissions:
       actions: read
       contents: read
@@ -605,27 +678,10 @@ jobs:
       # This selects "ARCH=amd64 + the latest supported Python + CUDA".
       matrix_filter: map(select(.ARCH == "amd64")) | group_by(.CUDA_VER|split(".")|map(tonumber)|.[0]) | map(max_by([(.PY_VER|split(".")|map(tonumber)), (.CUDA_VER|split(".")|map(tonumber))]))
       build_type: pull-request
-      script: "ci/test_wheel_cudf_polars.sh"
-  wheel-tests-cudf-polars-with-rapidsmpf:
-    needs: [wheel-build-cudf-polars, changed-files]
-    permissions:
-      actions: read
-      contents: read
-      id-token: write
-      packages: read
-      pull-requests: read
-    secrets: inherit # zizmor: ignore[secrets-inherit]
-    uses: rapidsai/shared-workflows/.github/workflows/wheels-test.yaml@main
-    if: fromJSON(needs.changed-files.outputs.changed_file_groups).test_python_wheels && fromJSON(needs.changed-files.outputs.changed_file_groups).neither_cudf_nor_dask_cudf
-    with:
-      # This selects "ARCH=amd64 + the latest supported Python + CUDA" to minimize CI usage.
-      # (rapidsmpf compatibility already validated in rapidsmpf CI)
-      matrix_filter: map(select(.ARCH == "amd64")) | group_by(.CUDA_VER|split(".")|map(tonumber)|.[0]) | map(max_by([(.PY_VER|split(".")|map(tonumber)), (.CUDA_VER|split(".")|map(tonumber))]))
-      build_type: pull-request
       container-options: "--cap-add CAP_SYS_PTRACE --shm-size=8g --ulimit=nofile=1000000:1000000"
-      script: "ci/test_cudf_polars_experimental.sh"
+      script: "env POLARS_VERSIONS=endpoints ci/test_wheel_cudf_polars.sh"
   cudf-polars-polars-tests:
-    needs: [wheel-build-cudf-polars, changed-files]
+    needs: [wheel-build-cudf-polars, wheel-build-cudf-streaming, changed-files]
     permissions:
       actions: read
       contents: read
@@ -675,6 +731,7 @@ jobs:
       matrix_filter: map(select(.ARCH == "amd64")) | group_by(.CUDA_VER|split(".")|map(tonumber)|.[0]) | map(max_by([(.PY_VER|split(".")|map(tonumber)), (.CUDA_VER|split(".")|map(tonumber))]))
       build_type: pull-request
       script: ci/test_wheel_dask_cudf.sh
+  # build cudf with benchmarks but disable for cudf_streaming since we can't use MPI/UCX in wheel-based builds
   devcontainer:
     permissions:
       actions: read
@@ -687,7 +744,7 @@ jobs:
     uses: rapidsai/shared-workflows/.github/workflows/build-in-devcontainer.yaml@main
     with:
       arch: '["amd64", "arm64"]'
-      cuda: '["13.1"]'
+      cuda: '["13.3"]'
       node_type: "cpu8"
       timeout-minutes: 90
       env: |
@@ -700,10 +757,7 @@ jobs:
       # -DCUDF_BUILD_TESTUTIL=OFF to avoid IMPORTED_GLOBAL promotion errors when cuCascade's find_package(cudf) loads cudf-config.cmake from a CPM subdirectory
       build_command: |
         sccache --zero-stats;
-        clone-rapidsmpf -j$(nproc) -v -q --branch "$(cat ~/cudf/RAPIDS_BRANCH)" --clone-upstream --depth 1 --single-branch --shallow-submodules;
-        if [ "$PYTHON_PACKAGE_MANAGER" = "pip" ]; then rapids-make-pip-env --force; elif [ "$PYTHON_PACKAGE_MANAGER" = "conda" ]; then rapids-make-conda-env --force; fi;
-        rapids-generate-scripts;
-        build-all -j0 -DBUILD_BENCHMARKS=OFF -DBUILD_NUMA_SUPPORT=OFF -DBUILD_TESTS=OFF -DCUDF_BUILD_TESTUTIL=OFF --verbose 2>&1 | tee telemetry-artifacts/build.log;
+        build-all -j0 --verbose -DBUILD_BENCHMARKS=ON 2>&1 | tee telemetry-artifacts/build.log;
         sccache --show-adv-stats | tee telemetry-artifacts/sccache-stats.txt;
   unit-tests-cudf-pandas:
     needs: [wheel-build-cudf, changed-files]
@@ -739,9 +793,29 @@ jobs:
       sha: ${{ inputs.sha }}
       node_type: "gpu-l4-latest-1"
       continue-on-error: true
-      container_image: "rapidsai/ci-conda:26.06-latest"
+      container_image: "rapidsai/ci-conda:26.08-latest"
       script: |
         ci/cudf_pandas_scripts/third-party-integration/test.sh python/cudf/cudf_pandas_tests/third_party_integration_tests/dependencies.yaml
+  cuml-compat-tests:
+    needs: [conda-python-build, conda-python-build-noarch, changed-files]
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      packages: read
+      pull-requests: read
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+    uses: rapidsai/shared-workflows/.github/workflows/custom-job.yaml@main
+    if: fromJSON(needs.changed-files.outputs.changed_file_groups).test_python_conda && fromJSON(needs.changed-files.outputs.changed_file_groups).neither_cudf_polars_nor_dask_cudf
+    with:
+      build_type: pull-request
+      branch: ${{ inputs.branch }}
+      date: ${{ inputs.date }}
+      sha: ${{ inputs.sha }}
+      node_type: "gpu-l4-latest-1"
+      continue-on-error: true
+      container_image: "rapidsai/ci-conda:26.06-latest"
+      script: "ci/test_cuml_compat.sh"
   pandas-tests:
     # run the Pandas unit tests using PR branch
     needs: [wheel-build-cudf, changed-files]
@@ -760,7 +834,7 @@ jobs:
       date: ${{ inputs.date }}
       sha: ${{ inputs.sha }}
       node_type: "gpu-l4-latest-1"
-      container_image: "rapidsai/citestwheel:26.06-latest"
+      container_image: "rapidsai/citestwheel:26.08-latest"
       script: ci/cudf_pandas_scripts/pandas-tests/run.sh pr
   narwhals-tests:
     needs: [conda-python-build, conda-python-build-noarch, changed-files]
@@ -779,7 +853,7 @@ jobs:
       date: ${{ inputs.date }}
       sha: ${{ inputs.sha }}
       node_type: "gpu-l4-latest-1"
-      container_image: "rapidsai/ci-conda:26.06-latest"
+      container_image: "rapidsai/ci-conda:26.08-latest"
       script: ci/test_narwhals.sh
   spark-rapids-jni:
     needs: changed-files
@@ -791,12 +865,11 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/spark-rapids-jni.yaml
     if: fromJSON(needs.changed-files.outputs.changed_file_groups).test_java
-
   telemetry-summarize:
     # This job must use a self-hosted runner to record telemetry traces.
     runs-on: linux-amd64-cpu4
     permissions:
-      id-token: write
+      actions: write
     needs: pr-builder
     if: ${{ vars.TELEMETRY_ENABLED == 'true' && !cancelled() }}
     continue-on-error: true

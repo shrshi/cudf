@@ -231,7 +231,9 @@ merge<LargerIterator, SmallerIterator>::matches_per_row(rmm::cuda_stream_view st
                       match_counts_it,
                       comparator);
 
-  rmm::device_uvector<size_type> lower_bounds(larger_numrows, stream, mr);
+  auto match_counts_update_it =
+    cuda::tabulate_output_iterator([match_counts = match_counts.begin()] __device__(
+                                     size_type idx, size_type val) { match_counts[idx] -= val; });
   thrust::lower_bound(rmm::exec_policy_nosync(stream, cudf::get_current_device_resource_ref()),
                       smaller_it,
                       smaller_it + smaller_numrows,
@@ -321,8 +323,16 @@ merge<LargerIterator, SmallerIterator>::inner(rmm::cuda_stream_view stream,
   cub::DeviceTransform::Fill(smaller_indices.begin(), smaller_indices.size(), 1, stream.value());
 
   {
-    auto const comparator = tt_comparator->less<true>(nullate::DYNAMIC{has_nulls});
-    auto smaller_it       = cuda::transform_iterator(
+    auto const comparator    = tt_comparator->less<true>(nullate::DYNAMIC{has_nulls});
+    auto smaller_tabulate_it = cuda::tabulate_output_iterator(
+      [nonzero_matches = nonzero_matches.begin(),
+       match_offsets   = match_offsets.begin(),
+       smaller_indices = smaller_indices.begin()] __device__(size_type idx, size_type lb) {
+        auto const lhs_idx   = nonzero_matches[idx];
+        auto const pos       = match_offsets[lhs_idx];
+        smaller_indices[pos] = lb;
+      });
+    auto smaller_it = cuda::transform_iterator(
       sorted_smaller_order_begin,
       cuda::proclaim_return_type<detail::row::lhs_index_type>(
         [] __device__(size_type idx) { return static_cast<detail::row::lhs_index_type>(idx); }));
@@ -330,7 +340,6 @@ merge<LargerIterator, SmallerIterator>::inner(rmm::cuda_stream_view stream,
       nonzero_matches.begin(),
       cuda::proclaim_return_type<detail::row::rhs_index_type>(
         [] __device__(size_type idx) { return static_cast<detail::row::rhs_index_type>(idx); }));
-    rmm::device_uvector<size_type> lb_positions(nonzero_matches.size(), stream, mr);
     thrust::lower_bound(rmm::exec_policy_nosync(stream, cudf::get_current_device_resource_ref()),
                         smaller_it,
                         smaller_it + smaller_numrows,
@@ -473,8 +482,17 @@ merge<LargerIterator, SmallerIterator>::left(rmm::cuda_stream_view stream,
     smaller_indices.begin() + left_join_only_matches, inner_join_matches, 1, stream.value());
 
   {
-    auto const comparator = tt_comparator->less<true>(nullate::DYNAMIC{has_nulls});
-    auto smaller_it       = cuda::transform_iterator(
+    auto const comparator    = tt_comparator->less<true>(nullate::DYNAMIC{has_nulls});
+    auto smaller_tabulate_it = cuda::tabulate_output_iterator(
+      [nonzero_matches = nonzero_matches.begin(),
+       match_offsets   = match_offsets.begin(),
+       smaller_indices =
+         smaller_indices.begin() + left_join_only_matches] __device__(size_type idx, size_type lb) {
+        auto const lhs_idx   = nonzero_matches[idx];
+        auto const pos       = match_offsets[lhs_idx];
+        smaller_indices[pos] = lb;
+      });
+    auto smaller_it = cuda::transform_iterator(
       sorted_smaller_order_begin,
       cuda::proclaim_return_type<detail::row::lhs_index_type>(
         [] __device__(size_type idx) { return static_cast<detail::row::lhs_index_type>(idx); }));
@@ -482,7 +500,6 @@ merge<LargerIterator, SmallerIterator>::left(rmm::cuda_stream_view stream,
       nonzero_matches.begin(),
       cuda::proclaim_return_type<detail::row::rhs_index_type>(
         [] __device__(size_type idx) { return static_cast<detail::row::rhs_index_type>(idx); }));
-    rmm::device_uvector<size_type> lb_positions(nonzero_matches.size(), stream, mr);
     thrust::lower_bound(rmm::exec_policy_nosync(stream, cudf::get_current_device_resource_ref()),
                         smaller_it,
                         smaller_it + smaller_numrows,
