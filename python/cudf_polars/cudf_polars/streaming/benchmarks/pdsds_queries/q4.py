@@ -193,6 +193,7 @@ CUSTOMER_COMPOSITE = [
 def build_sales_agg(
     sales_df: pl.LazyFrame,
     date_df: pl.LazyFrame,
+    customer_df: pl.LazyFrame,
     sold_date_key: str,
     customer_key: str,
     col_prefix: str,
@@ -212,7 +213,6 @@ def build_sales_agg(
         .join(customer_df, left_on=customer_key, right_on="c_customer_sk")
         .group_by(CUSTOMER_COMPOSITE)
         .agg(profit_expr.sum().alias("year_total"))
-        .rename({customer_key: "customer_sk"})
     )
 
 

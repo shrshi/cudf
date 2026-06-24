@@ -26,9 +26,6 @@ from rapidsmpf.streaming.core.memory_reserve_or_wait import (
 )
 from rapidsmpf.streaming.core.message import Message
 
-import pylibcudf as plc
-from pylibcudf.hashing import LIBCUDF_DEFAULT_HASH_SEED
-
 from cudf_polars.containers import DataFrame
 from cudf_polars.dsl.ir import IR, Join
 from cudf_polars.dsl.utils.naming import names_to_indices
@@ -69,7 +66,6 @@ if TYPE_CHECKING:
     from rapidsmpf.communicator.communicator import Communicator
     from rapidsmpf.streaming.core.channel import Channel
     from rapidsmpf.streaming.core.context import Context
-    from rapidsmpf.streaming.cudf.bloom_filter import BloomFilterChunk
 
     from cudf_polars.dsl.ir import IR, IRExecutionContext
     from cudf_polars.streaming.actor_graph.dispatch import SubNetGenerator

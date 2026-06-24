@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import itertools
 import math
@@ -60,7 +61,7 @@ if TYPE_CHECKING:
 def _(
     ir: DataFrameScan, rec: LowerIRTransformer
 ) -> tuple[IR, MutableMapping[IR, PartitionInfo]]:
-    from cudf_polars.experimental.rapidsmpf.io import lower_dataframescan_rapidsmpf
+    config_options = rec.state["config_options"]
 
     # NOTE: We calculate the expected partition count
     # to help trigger fallback warnings in lower_ir_graph.

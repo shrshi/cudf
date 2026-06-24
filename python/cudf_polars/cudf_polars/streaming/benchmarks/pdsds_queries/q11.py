@@ -224,7 +224,6 @@ def polars_impl(run_config: RunConfig) -> QueryResult:
                 pl.col("w_sec_year_total") / pl.col("w_first_year_total")
                 > pl.col("s_sec_year_total") / pl.col("s_first_year_total")
             )
-            .join(customer, left_on="customer_sk", right_on="c_customer_sk")
             .select(
                 [
                     pl.col("c_customer_id").alias("customer_id"),

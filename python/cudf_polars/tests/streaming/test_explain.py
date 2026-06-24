@@ -19,7 +19,6 @@ from cudf_polars.streaming.explain import (
     explain_query,
     serialize_query,
 )
-from cudf_polars.experimental.rapidsmpf.frontend.options import StreamingOptions
 from cudf_polars.testing.asserts import assert_gpu_result_equal
 from cudf_polars.testing.io import make_lazy_frame, make_partitioned_source
 from cudf_polars.utils.versions import POLARS_VERSION_LT_141
