@@ -393,7 +393,6 @@ filtered_join::filtered_join(cudf::table_view const& build,
   : filtered_join(build, compare_nulls, cudf::detail::CUCO_DESIRED_LOAD_FACTOR, stream)
 {
 }
-#pragma GCC diagnostic pop
 
 std::unique_ptr<rmm::device_uvector<size_type>> filtered_join::semi_join(
   cudf::table_view const& probe,

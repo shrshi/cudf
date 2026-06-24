@@ -27,7 +27,6 @@
 #include <cudf/utilities/pinned_memory.hpp>
 
 #include <cuda/iterator>
-#include <cuda/memory_resource>
 
 #include <fstream>
 #include <limits>

@@ -56,15 +56,6 @@ struct row_group_stats_caster : public stats_caster_base {
     if constexpr (cudf::is_compound<T>() && !std::is_same_v<T, string_view>) {
       CUDF_FAIL("Compound types do not have statistics");
     } else {
-      // Compute timestamp scale factor for precision conversion
-      auto const ts_scale = [&] {
-        if constexpr (cudf::is_timestamp<T>()) {
-          auto const& schema = per_file_metadata[0].schema[schema_idx];
-          return calc_timestamp_scale(schema.logical_type, static_cast<int32_t>(T::period::den));
-        }
-        return 0;
-      }();
-
       host_column<T> min(total_row_groups, stream);
       host_column<T> max(total_row_groups, stream);
       std::optional<host_column<bool>> is_null;
