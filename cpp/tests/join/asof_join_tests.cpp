@@ -154,4 +154,39 @@ TEST_F(AsofJoinTest, MismatchedOrderedKeyTypes)
     cudf::logic_error);
 }
 
+TEST_F(AsofJoinTest, LargeMultiBlock)
+{
+  // 2000 contiguous groups of 1000 rows each, ordered keys ascending within each group.
+  // Exercises comparator lifetimes and dispatch across many thread blocks.
+  auto constexpr num_rows   = 2'000'000;
+  auto constexpr group_size = 1000;
+  std::vector<int32_t> right_by_host(num_rows);
+  std::vector<int32_t> right_on_host(num_rows);
+  for (int32_t i = 0; i < num_rows; ++i) {
+    right_by_host[i] = i / group_size;
+    right_on_host[i] = i % group_size;
+  }
+  fixed_width_column_wrapper<int32_t> right_by(right_by_host.begin(), right_by_host.end());
+  fixed_width_column_wrapper<int32_t> right_on(right_on_host.begin(), right_on_host.end());
+
+  auto constexpr num_groups = num_rows / group_size;
+  std::vector<int32_t> left_by_host(num_groups);
+  std::vector<int32_t> left_on_host(num_groups, group_size / 2);
+  for (int32_t g = 0; g < num_groups; ++g) {
+    left_by_host[g] = g;
+  }
+  fixed_width_column_wrapper<int32_t> left_by(left_by_host.begin(), left_by_host.end());
+  fixed_width_column_wrapper<int32_t> left_on(left_on_host.begin(), left_on_host.end());
+
+  cudf::asof_join join(cudf::table_view{{right_by}}, right_on);
+  auto result =
+    join.join(cudf::table_view{{left_by}}, left_on, cudf::asof_join_strategy::BACKWARD, true);
+
+  std::vector<cudf::size_type> expected(num_groups);
+  for (int32_t g = 0; g < num_groups; ++g) {
+    expected[g] = g * group_size + group_size / 2;
+  }
+  expect_gather_map(*result, expected);
+}
+
 }  // namespace
