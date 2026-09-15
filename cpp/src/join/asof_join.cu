@@ -198,6 +198,14 @@ asof_join::asof_join(table_view const& right_by,
                "As-of join ordered keys must be integer, timestamp, or duration columns");
   validate_by_types(right_by);
 
+  if (right_by.num_columns() > 0) {
+    auto const mr = cudf::get_current_device_resource_ref();
+    _right_eq_preprocessed =
+      cudf::detail::row::equality::preprocessed_table::create(right_by, stream, mr);
+    _right_lex_preprocessed = cudf::detail::row::lexicographic::preprocessed_table::create(
+      right_by, {}, {}, stream);
+  }
+
   auto group_index     = build_right_group_index(right_by, right_on.size(), stream);
   _right_group_rows    = std::move(group_index.rows);
   _right_group_offsets = std::move(group_index.offsets);
@@ -243,8 +251,10 @@ std::unique_ptr<rmm::device_uvector<size_type>> asof_join::join(
                  size_type{0});
   } else {
     auto const has_nulls = cudf::has_nested_nulls(_right_by) || cudf::has_nested_nulls(left_by);
-    auto const row_less =
-      cudf::detail::row::lexicographic::two_table_comparator{_right_by, left_by, {}, {}, stream};
+    auto left_lex = cudf::detail::row::lexicographic::preprocessed_table::create(
+      left_by, {}, {}, stream);
+    auto const row_less = cudf::detail::row::lexicographic::two_table_comparator{
+      _right_lex_preprocessed, std::move(left_lex)};
     auto const right_group_rows = cuda::transform_iterator(
       _right_group_rows.begin(),
       cuda::proclaim_return_type<detail::row::lhs_index_type>(
@@ -257,8 +267,10 @@ std::unique_ptr<rmm::device_uvector<size_type>> asof_join::join(
                         group_positions->begin(),
                         row_less.less<false>(nullate::DYNAMIC{has_nulls}));
 
-    auto const row_equal =
-      cudf::detail::row::equality::two_table_comparator{_right_by, left_by, stream, temp_mr};
+    auto left_eq =
+      cudf::detail::row::equality::preprocessed_table::create(left_by, stream, temp_mr);
+    auto const row_equal = cudf::detail::row::equality::two_table_comparator{
+      _right_eq_preprocessed, std::move(left_eq)};
     auto const equal =
       row_equal.equal_to<false>(nullate::DYNAMIC{has_nulls}, null_equality::UNEQUAL);
     thrust::transform(

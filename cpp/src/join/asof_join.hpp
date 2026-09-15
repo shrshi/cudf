@@ -6,6 +6,8 @@
 #pragma once
 
 #include <cudf/column/column_view.hpp>
+#include <cudf/detail/row_operator/equality.cuh>
+#include <cudf/detail/row_operator/lexicographic.cuh>
 #include <cudf/join/asof_join.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
@@ -46,6 +48,9 @@ class asof_join {
   rmm::device_uvector<size_type> _right_group_rows;
   rmm::device_uvector<size_type> _right_group_offsets;
   size_type _num_right_groups{};
+  // Preprocessed right-side grouping keys, built once and reused by every probe
+  std::shared_ptr<row::equality::preprocessed_table> _right_eq_preprocessed;
+  std::shared_ptr<row::lexicographic::preprocessed_table> _right_lex_preprocessed;
 };
 
 }  // namespace cudf::detail
