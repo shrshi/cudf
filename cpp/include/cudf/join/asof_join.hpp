@@ -51,9 +51,14 @@ class asof_join;
  * comparing an ordered key (`on`). The right side is preprocessed on construction and may be probed
  * repeatedly with different left inputs.
  *
- * The inputs must be sorted in ascending lexicographic order by `(by..., on)`, with nulls ordered
- * before non-nulls. Grouping-key nulls compare unequal. A null left ordered key never matches, and
- * a null right ordered key is never a valid match candidate.
+ * The right input must be sorted in ascending lexicographic order by `(right_by..., right_on)`,
+ * with nulls ordered before non-nulls. Consequently, rows with equal `right_by` keys must be
+ * physically contiguous; interleaved right-side groups are not supported. The left input may be in
+ * any order, and the result preserves its row order. These ordering preconditions are not
+ * validated.
+ *
+ * Grouping-key nulls compare unequal. A null left ordered key never matches, and a null right
+ * ordered key is never a valid match candidate.
  *
  * V1 supports `asof_join_strategy::BACKWARD` with exact matches enabled. It selects the last right
  * row in the same group whose ordered key is less than or equal to the left ordered key. If the
@@ -78,7 +83,8 @@ class asof_join {
   /**
    * @brief Constructs an as-of join object by preprocessing the right-side keys.
    *
-   * Passing an empty `right_by` performs an ungrouped as-of join.
+   * Passing an empty `right_by` performs an ungrouped as-of join. `right_on` must be sorted in
+   * ascending order in this case.
    *
    * @throws cudf::logic_error if `right_by.num_rows() != right_on.size()`
    * @throws cudf::logic_error if the right-side keys do not satisfy the supported type contract
