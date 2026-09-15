@@ -125,25 +125,25 @@ right_group_index build_right_group_index(table_view const& right_by,
 
 template <typename T>
 struct backward_probe {
-  column_device_view const* left_on;
-  column_device_view const* right_on;
+  column_device_view left_on;
+  column_device_view right_on;
   size_type const* group_offsets;
   size_type const* group_positions;
   size_type num_groups;
 
   __device__ size_type operator()(size_type left_row) const
   {
-    if (left_on->is_null(left_row)) { return JoinNoMatch; }
+    if (left_on.is_null(left_row)) { return JoinNoMatch; }
 
     auto const group = group_positions[left_row];
     if (group < 0 || group >= num_groups) { return JoinNoMatch; }
 
     auto first            = group_offsets[group];
     auto last             = group_offsets[group + 1];
-    auto const left_value = left_on->element<T>(left_row);
+    auto const left_value = left_on.element<T>(left_row);
     while (first < last) {
       auto const middle = first + (last - first) / 2;
-      if (right_on->is_null(middle) || !(left_value < right_on->element<T>(middle))) {
+      if (right_on.is_null(middle) || !(left_value < right_on.element<T>(middle))) {
         first = middle + 1;
       } else {
         last = middle;
@@ -151,13 +151,13 @@ struct backward_probe {
     }
     if (first == group_offsets[group]) { return JoinNoMatch; }
     auto const candidate = first - 1;
-    return right_on->is_null(candidate) ? JoinNoMatch : candidate;
+    return right_on.is_null(candidate) ? JoinNoMatch : candidate;
   }
 };
 
 struct probe_dispatch {
-  column_device_view const* left_on;
-  column_device_view const* right_on;
+  column_device_view left_on;
+  column_device_view right_on;
   size_type const* group_offsets;
   size_type const* group_positions;
   size_type num_groups;
@@ -171,7 +171,7 @@ struct probe_dispatch {
       thrust::transform(
         rmm::exec_policy_nosync(stream, cudf::get_current_device_resource_ref()),
         cuda::counting_iterator<size_type>{0},
-        cuda::counting_iterator<size_type>{left_on->size()},
+        cuda::counting_iterator<size_type>{left_on.size()},
         output,
         backward_probe<T>{left_on, right_on, group_offsets, group_positions, num_groups});
     } else {
@@ -280,8 +280,8 @@ std::unique_ptr<rmm::device_uvector<size_type>> asof_join::join(
   auto const left_on_device  = column_device_view::create(left_on, stream, temp_mr);
   auto const right_on_device = column_device_view::create(_right_on, stream, temp_mr);
   cudf::type_dispatcher(left_on.type(),
-                        probe_dispatch{left_on_device.get(),
-                                       right_on_device.get(),
+                        probe_dispatch{*left_on_device,
+                                       *right_on_device,
                                        _right_group_offsets.data(),
                                        group_positions->data(),
                                        _num_right_groups,
