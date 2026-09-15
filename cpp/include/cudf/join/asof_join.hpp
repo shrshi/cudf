@@ -60,14 +60,13 @@ class asof_join;
  * Grouping-key nulls compare unequal. A null left ordered key never matches, and a null right
  * ordered key is never a valid match candidate.
  *
- * V1 supports `asof_join_strategy::BACKWARD` with exact matches enabled. It selects the last right
- * row in the same group whose ordered key is less than or equal to the left ordered key. If the
- * selected ordered key has duplicates, the last duplicate is selected.
+ * Currently, only `asof_join_strategy::BACKWARD` with exact matches enabled is supported. It
+ * selects the last right row in the same group whose ordered key is less than or equal to the left
+ * ordered key. If the selected ordered key has duplicates, the last duplicate is selected.
  *
- * The ordered columns must have the same type and must be integer, timestamp, duration, or a
- * fixed-width representation of a Polars Date or Time. Corresponding grouping columns must have the
- * same type and must be strings or fixed-width scalar types. Nested and dictionary columns are not
- * supported.
+ * The ordered columns must have the same type and must be integer, timestamp, or duration columns.
+ * Corresponding grouping columns must have the same type and must be strings or fixed-width scalar
+ * types. Nested and dictionary columns are not supported.
  *
  * @note The `asof_join` object must not outlive the columns viewed by `right_by` or `right_on`.
  */
@@ -102,6 +101,9 @@ class asof_join {
    *
    * The result has one entry per left row in left input order. An entry is `cudf::JoinNoMatch` when
    * no eligible right row exists in the same group or the left ordered key is null.
+   *
+   * This method is thread-safe and can be called concurrently from multiple threads on the same
+   * instance.
    *
    * @throws cudf::logic_error if the left and right inputs have different numbers of grouping keys
    * @throws cudf::logic_error if `left_by.num_rows() != left_on.size()`
