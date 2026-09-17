@@ -135,9 +135,9 @@ void asof_join::build_right_group_index(cuda::stream_ref stream)
 {
   // Ungrouped joins may have an empty _right_by with zero rows, so use _right_on's size.
   auto const num_rows = _right_on.size();
-  auto const mr      = cudf::get_current_device_resource_ref();
-  auto mr_property   = cuda::std::execution::prop{cuda::mr::get_memory_resource, mr};
-  auto env           = cuda::std::execution::env{cuda::stream_ref{stream.get()}, mr_property};
+  auto const mr       = cudf::get_current_device_resource_ref();
+  auto mr_property    = cuda::std::execution::prop{cuda::mr::get_memory_resource, mr};
+  auto env            = cuda::std::execution::env{cuda::stream_ref{stream.get()}, mr_property};
   _right_group_offsets.resize(static_cast<std::size_t>(num_rows) + 1, stream);
 
   if (num_rows == 0) {
@@ -154,27 +154,26 @@ void asof_join::build_right_group_index(cuda::stream_ref stream)
     return;
   }
 
-  // Mark the first row and each change in adjacent by keys, then compact their indices into offsets.
-  // Append num_rows so group g occupies [offsets[g], offsets[g + 1]).
+  // Mark the first row and each change in adjacent by keys, then compact their indices into
+  // offsets. Append num_rows so group g occupies [offsets[g], offsets[g + 1]).
   auto const has_nulls  = cudf::has_nested_nulls(_right_by);
   auto const comparator = cudf::detail::row::equality::self_comparator{_right_by, stream, mr};
   auto const row_equal =
     comparator.equal_to<false>(nullate::DYNAMIC{has_nulls}, null_equality::EQUAL);
   rmm::device_uvector<uint8_t> group_starts(num_rows, stream, mr);
-  CUDF_CUDA_TRY(cub::DeviceTransform::Transform(
-    cuda::counting_iterator<size_type>{0},
-    group_starts.begin(),
-    num_rows,
-    is_group_start{row_equal},
-    env));
+  CUDF_CUDA_TRY(cub::DeviceTransform::Transform(cuda::counting_iterator<size_type>{0},
+                                                group_starts.begin(),
+                                                num_rows,
+                                                is_group_start{row_equal},
+                                                env));
 
   cudf::detail::device_scalar<size_type> num_groups{0, stream, mr};
   CUDF_CUDA_TRY(cub::DeviceSelect::Flagged(cuda::counting_iterator<size_type>{0},
-                                        group_starts.begin(),
-                                        _right_group_offsets.begin(),
-                                        num_groups.data(),
-                                        num_rows,
-                                        env));
+                                           group_starts.begin(),
+                                           _right_group_offsets.begin(),
+                                           num_groups.data(),
+                                           num_rows,
+                                           env));
 
   _num_right_groups = num_groups.value(stream);
   CUDF_CUDA_TRY(
@@ -185,9 +184,7 @@ void asof_join::build_right_group_index(cuda::stream_ref stream)
 asof_join::asof_join(table_view const& right_by,
                      column_view const& right_on,
                      cuda::stream_ref stream)
-  : _right_by{right_by},
-    _right_on{right_on},
-    _right_group_offsets{0, stream}
+  : _right_by{right_by}, _right_on{right_on}, _right_group_offsets{0, stream}
 {
   cudf::scoped_range range{"asof_join::asof_join"};
   validate_key_sizes(right_by, right_on, "right");
@@ -230,6 +227,7 @@ std::unique_ptr<rmm::device_uvector<size_type>> asof_join::join(
   validate_by_types(left_by);
 
   auto const temp_mr = cudf::get_current_device_resource_ref();
+  // Map each left row to a right group, or JoinNoMatch; ungrouped inputs use group zero.
   auto group_positions =
     std::make_unique<rmm::device_uvector<size_type>>(left_on.size(), stream, temp_mr);
 
@@ -245,6 +243,7 @@ std::unique_ptr<rmm::device_uvector<size_type>> asof_join::join(
                  size_type{0});
   } else {
     auto const has_nulls = cudf::has_nested_nulls(_right_by) || cudf::has_nested_nulls(left_by);
+    // Binary-search group representatives for the first by key not less than the left key.
     auto left_lex =
       cudf::detail::row::lexicographic::preprocessed_table::create(left_by, {}, {}, stream);
     auto const row_less = cudf::detail::row::lexicographic::two_table_comparator{
@@ -261,6 +260,7 @@ std::unique_ptr<rmm::device_uvector<size_type>> asof_join::join(
                         group_positions->begin(),
                         row_less.less<false>(nullate::DYNAMIC{has_nulls}));
 
+    // lower_bound gives only a candidate: reject missing/unequal groups and null grouping keys.
     auto left_eq =
       cudf::detail::row::equality::preprocessed_table::create(left_by, stream, temp_mr);
     auto const row_equal =
@@ -282,6 +282,8 @@ std::unique_ptr<rmm::device_uvector<size_type>> asof_join::join(
       });
   }
 
+  // Within each matched group, find the last row with right_on <= left_on.
+  // Return one right-row index (or JoinNoMatch) per left row, preserving left input order.
   auto result = std::make_unique<rmm::device_uvector<size_type>>(left_on.size(), stream, mr);
   auto const left_on_device  = column_device_view::create(left_on, stream, temp_mr);
   auto const right_on_device = column_device_view::create(_right_on, stream, temp_mr);
