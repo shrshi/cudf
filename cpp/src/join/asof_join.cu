@@ -64,60 +64,15 @@ void validate_key_sizes(table_view const& by, column_view const& on, char const*
                  " grouping and ordered keys must have the same number of rows");
 }
 
-struct right_group_index {
-  rmm::device_uvector<size_type> offsets;
-  size_type num_groups;
+template <typename RowEqual>
+struct is_group_start {
+  RowEqual row_equal;
+
+  __device__ uint8_t operator()(size_type row) const
+  {
+    return row == 0 || !row_equal(row - 1, row);
+  }
 };
-
-right_group_index build_right_group_index(table_view const& right_by,
-                                          size_type num_rows,
-                                          cuda::stream_ref stream)
-{
-  auto const mr    = cudf::get_current_device_resource_ref();
-  auto mr_property = cuda::std::execution::prop{cuda::mr::get_memory_resource, mr};
-  auto env         = cuda::std::execution::env{cuda::stream_ref{stream.get()}, mr_property};
-  rmm::device_uvector<size_type> offsets(static_cast<std::size_t>(num_rows) + 1, stream, mr);
-
-  if (num_rows == 0) {
-    CUDF_CUDA_TRY(cub::DeviceTransform::Fill(offsets.begin(), 1, size_type{0}, env));
-    offsets.resize(1, stream);
-    return {std::move(offsets), 0};
-  }
-
-  if (right_by.num_columns() == 0) {
-    CUDF_CUDA_TRY(cub::DeviceTransform::Fill(offsets.begin(), 1, size_type{0}, env));
-    CUDF_CUDA_TRY(cub::DeviceTransform::Fill(offsets.begin() + 1, 1, num_rows, env));
-    offsets.resize(2, stream);
-    return {std::move(offsets), 1};
-  }
-
-  auto const has_nulls  = cudf::has_nested_nulls(right_by);
-  auto const comparator = cudf::detail::row::equality::self_comparator{right_by, stream, mr};
-  auto const row_equal =
-    comparator.equal_to<false>(nullate::DYNAMIC{has_nulls}, null_equality::EQUAL);
-  rmm::device_uvector<uint8_t> group_starts(num_rows, stream, mr);
-  CUDF_CUDA_TRY(cub::DeviceTransform::Transform(
-    cuda::counting_iterator<size_type>{0},
-    group_starts.begin(),
-    num_rows,
-    [row_equal] __device__(size_type row) -> uint8_t {
-      return row == 0 || !row_equal(row - 1, row);
-    },
-    env));
-
-  cudf::detail::device_scalar<size_type> num_groups{0, stream, mr};
-  CUDF_CUDA_TRY(cub::DeviceSelect::Flagged(cuda::counting_iterator<size_type>{0},
-                                        group_starts.begin(),
-                                        offsets.begin(),
-                                        num_groups.data(),
-                                        num_rows,
-                                        env));
-
-  auto const host_num_groups = num_groups.value(stream);
-  CUDF_CUDA_TRY(cub::DeviceTransform::Fill(offsets.begin() + host_num_groups, 1, num_rows, env));
-  offsets.resize(static_cast<std::size_t>(host_num_groups) + 1, stream);
-  return {std::move(offsets), host_num_groups};
-}
 
 template <typename T>
 struct backward_probe {
@@ -180,6 +135,55 @@ struct probe_dispatch {
 
 namespace detail {
 
+void asof_join::build_right_group_index(cuda::stream_ref stream)
+{
+  // Ungrouped joins may have an empty _right_by with zero rows, so use _right_on's size.
+  auto const num_rows = _right_on.size();
+  auto const mr      = cudf::get_current_device_resource_ref();
+  auto mr_property   = cuda::std::execution::prop{cuda::mr::get_memory_resource, mr};
+  auto env           = cuda::std::execution::env{cuda::stream_ref{stream.get()}, mr_property};
+  _right_group_offsets.resize(static_cast<std::size_t>(num_rows) + 1, stream);
+
+  if (num_rows == 0) {
+    CUDF_CUDA_TRY(cub::DeviceTransform::Fill(_right_group_offsets.begin(), 1, size_type{0}, env));
+    _num_right_groups = 0;
+    return;
+  }
+
+  if (_right_by.num_columns() == 0) {
+    CUDF_CUDA_TRY(cub::DeviceTransform::Fill(_right_group_offsets.begin(), 1, size_type{0}, env));
+    CUDF_CUDA_TRY(cub::DeviceTransform::Fill(_right_group_offsets.begin() + 1, 1, num_rows, env));
+    _right_group_offsets.resize(2, stream);
+    _num_right_groups = 1;
+    return;
+  }
+
+  auto const has_nulls  = cudf::has_nested_nulls(_right_by);
+  auto const comparator = cudf::detail::row::equality::self_comparator{_right_by, stream, mr};
+  auto const row_equal =
+    comparator.equal_to<false>(nullate::DYNAMIC{has_nulls}, null_equality::EQUAL);
+  rmm::device_uvector<uint8_t> group_starts(num_rows, stream, mr);
+  CUDF_CUDA_TRY(cub::DeviceTransform::Transform(
+    cuda::counting_iterator<size_type>{0},
+    group_starts.begin(),
+    num_rows,
+    is_group_start{row_equal},
+    env));
+
+  cudf::detail::device_scalar<size_type> num_groups{0, stream, mr};
+  CUDF_CUDA_TRY(cub::DeviceSelect::Flagged(cuda::counting_iterator<size_type>{0},
+                                        group_starts.begin(),
+                                        _right_group_offsets.begin(),
+                                        num_groups.data(),
+                                        num_rows,
+                                        env));
+
+  _num_right_groups = num_groups.value(stream);
+  CUDF_CUDA_TRY(
+    cub::DeviceTransform::Fill(_right_group_offsets.begin() + _num_right_groups, 1, num_rows, env));
+  _right_group_offsets.resize(static_cast<std::size_t>(_num_right_groups) + 1, stream);
+}
+
 asof_join::asof_join(table_view const& right_by,
                      column_view const& right_on,
                      cuda::stream_ref stream)
@@ -201,9 +205,7 @@ asof_join::asof_join(table_view const& right_by,
       cudf::detail::row::lexicographic::preprocessed_table::create(right_by, {}, {}, stream);
   }
 
-  auto group_index     = build_right_group_index(right_by, right_on.size(), stream);
-  _right_group_offsets = std::move(group_index.offsets);
-  _num_right_groups    = group_index.num_groups;
+  build_right_group_index(stream);
 }
 
 std::unique_ptr<rmm::device_uvector<size_type>> asof_join::join(
