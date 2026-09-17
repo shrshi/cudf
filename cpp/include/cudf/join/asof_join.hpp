@@ -85,7 +85,8 @@ class asof_join {
    * Passing an empty `right_by` performs an ungrouped as-of join. `right_on` must be sorted in
    * ascending order in this case.
    *
-   * @throws cudf::logic_error if `right_by.num_rows() != right_on.size()`
+   * @throws cudf::logic_error if `right_by` has columns and
+   *         `right_by.num_rows() != right_on.size()`
    * @throws cudf::logic_error if the right-side keys do not satisfy the supported type contract
    *
    * @param right_by Right-side equality grouping keys
@@ -105,8 +106,14 @@ class asof_join {
    * This method is thread-safe and can be called concurrently from multiple threads on the same
    * instance.
    *
+   * Right-side preprocessing is asynchronous on the stream passed to the constructor. Before
+   * probing on a different stream, the caller must synchronize the constructor stream or establish
+   * an equivalent CUDA event dependency so that preprocessing completes before the probe executes.
+   * Probes on the constructor stream are already ordered and require no additional synchronization.
+   *
    * @throws cudf::logic_error if the left and right inputs have different numbers of grouping keys
-   * @throws cudf::logic_error if `left_by.num_rows() != left_on.size()`
+   * @throws cudf::logic_error if `left_by` has columns and
+   *         `left_by.num_rows() != left_on.size()`
    * @throws cudf::logic_error if corresponding left and right key types do not match
    * @throws cudf::logic_error if the left-side keys do not satisfy the supported type contract
    * @throws cudf::logic_error if `strategy` is not `asof_join_strategy::BACKWARD`
