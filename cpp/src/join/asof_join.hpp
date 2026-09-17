@@ -45,10 +45,11 @@ class asof_join {
  private:
   table_view _right_by;
   column_view _right_on;
-  rmm::device_uvector<size_type> _right_group_rows;
   rmm::device_uvector<size_type> _right_group_offsets;
   size_type _num_right_groups{};
-  // Preprocessed right-side grouping keys, built once and reused by every probe
+  // Built once and reused by every probe. Lexicographic comparison locates a candidate group
+  // with lower_bound; equality verifies an actual match, treating null grouping keys as unequal.
+  // The two comparator APIs require separate preprocessing types.
   std::shared_ptr<row::equality::preprocessed_table> _right_eq_preprocessed;
   std::shared_ptr<row::lexicographic::preprocessed_table> _right_lex_preprocessed;
 };

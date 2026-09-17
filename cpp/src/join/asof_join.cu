@@ -65,7 +65,6 @@ void validate_key_sizes(table_view const& by, column_view const& on, char const*
 }
 
 struct right_group_index {
-  rmm::device_uvector<size_type> rows;
   rmm::device_uvector<size_type> offsets;
   size_type num_groups;
 };
@@ -77,22 +76,19 @@ right_group_index build_right_group_index(table_view const& right_by,
   auto const mr    = cudf::get_current_device_resource_ref();
   auto mr_property = cuda::std::execution::prop{cuda::mr::get_memory_resource, mr};
   auto env         = cuda::std::execution::env{cuda::stream_ref{stream.get()}, mr_property};
-  rmm::device_uvector<size_type> rows(num_rows, stream, mr);
   rmm::device_uvector<size_type> offsets(static_cast<std::size_t>(num_rows) + 1, stream, mr);
 
   if (num_rows == 0) {
     CUDF_CUDA_TRY(cub::DeviceTransform::Fill(offsets.begin(), 1, size_type{0}, env));
     offsets.resize(1, stream);
-    return {std::move(rows), std::move(offsets), 0};
+    return {std::move(offsets), 0};
   }
 
   if (right_by.num_columns() == 0) {
-    CUDF_CUDA_TRY(cub::DeviceTransform::Fill(rows.begin(), 1, size_type{0}, env));
     CUDF_CUDA_TRY(cub::DeviceTransform::Fill(offsets.begin(), 1, size_type{0}, env));
     CUDF_CUDA_TRY(cub::DeviceTransform::Fill(offsets.begin() + 1, 1, num_rows, env));
-    rows.resize(1, stream);
     offsets.resize(2, stream);
-    return {std::move(rows), std::move(offsets), 1};
+    return {std::move(offsets), 1};
   }
 
   auto const has_nulls  = cudf::has_nested_nulls(right_by);
@@ -110,17 +106,17 @@ right_group_index build_right_group_index(table_view const& right_by,
     env));
 
   cudf::detail::device_scalar<size_type> num_groups{0, stream, mr};
-  auto const input  = cuda::make_zip_iterator(cuda::counting_iterator<size_type>{0},
-                                             cuda::counting_iterator<size_type>{0});
-  auto const output = cuda::make_zip_iterator(rows.begin(), offsets.begin());
-  CUDF_CUDA_TRY(cub::DeviceSelect::Flagged(
-    input, group_starts.begin(), output, num_groups.data(), num_rows, env));
+  CUDF_CUDA_TRY(cub::DeviceSelect::Flagged(cuda::counting_iterator<size_type>{0},
+                                        group_starts.begin(),
+                                        offsets.begin(),
+                                        num_groups.data(),
+                                        num_rows,
+                                        env));
 
   auto const host_num_groups = num_groups.value(stream);
   CUDF_CUDA_TRY(cub::DeviceTransform::Fill(offsets.begin() + host_num_groups, 1, num_rows, env));
-  rows.resize(host_num_groups, stream);
   offsets.resize(static_cast<std::size_t>(host_num_groups) + 1, stream);
-  return {std::move(rows), std::move(offsets), host_num_groups};
+  return {std::move(offsets), host_num_groups};
 }
 
 template <typename T>
@@ -189,7 +185,6 @@ asof_join::asof_join(table_view const& right_by,
                      cuda::stream_ref stream)
   : _right_by{right_by},
     _right_on{right_on},
-    _right_group_rows{0, stream},
     _right_group_offsets{0, stream}
 {
   cudf::scoped_range range{"asof_join::asof_join"};
@@ -207,7 +202,6 @@ asof_join::asof_join(table_view const& right_by,
   }
 
   auto group_index     = build_right_group_index(right_by, right_on.size(), stream);
-  _right_group_rows    = std::move(group_index.rows);
   _right_group_offsets = std::move(group_index.offsets);
   _num_right_groups    = group_index.num_groups;
 }
@@ -256,7 +250,7 @@ std::unique_ptr<rmm::device_uvector<size_type>> asof_join::join(
     auto const row_less = cudf::detail::row::lexicographic::two_table_comparator{
       _right_lex_preprocessed, std::move(left_lex)};
     auto const right_group_rows = cuda::transform_iterator(
-      _right_group_rows.begin(),
+      _right_group_offsets.begin(),
       cuda::proclaim_return_type<detail::row::lhs_index_type>(
         [] __device__(size_type row) { return detail::row::lhs_index_type{row}; }));
     thrust::lower_bound(rmm::exec_policy_nosync(stream, temp_mr),
@@ -279,7 +273,7 @@ std::unique_ptr<rmm::device_uvector<size_type>> asof_join::join(
       group_positions->end(),
       cuda::counting_iterator<size_type>{0},
       group_positions->begin(),
-      [group_rows = _right_group_rows.data(), num_groups = _num_right_groups, equal] __device__(
+      [group_rows = _right_group_offsets.data(), num_groups = _num_right_groups, equal] __device__(
         size_type group, size_type left_row) {
         return group < num_groups && equal(detail::row::lhs_index_type{group_rows[group]},
                                            detail::row::rhs_index_type{left_row})
