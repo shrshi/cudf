@@ -26,6 +26,7 @@
 #include <cub/device/device_transform.cuh>
 #include <cuda/functional>
 #include <cuda/iterator>
+#include <cuda/std/algorithm>
 #include <cuda/std/execution>
 #include <cuda/stream>
 #include <thrust/binary_search.h>
@@ -89,19 +90,14 @@ struct backward_probe {
     auto const group = group_positions[left_row];
     if (group < 0 || group >= num_groups) { return JoinNoMatch; }
 
-    auto first            = group_offsets[group];
-    auto last             = group_offsets[group + 1];
-    auto const left_value = left_on.element<T>(left_row);
-    while (first < last) {
-      auto const middle = first + (last - first) / 2;
-      if (right_on.is_null(middle) || !(left_value < right_on.element<T>(middle))) {
-        first = middle + 1;
-      } else {
-        last = middle;
-      }
-    }
-    if (first == group_offsets[group]) { return JoinNoMatch; }
-    auto const candidate = first - 1;
+    auto const first = cuda::counting_iterator<size_type>{group_offsets[group]};
+    auto const last  = cuda::counting_iterator<size_type>{group_offsets[group + 1]};
+    auto const upper = cuda::std::upper_bound(
+      first, last, left_on.element<T>(left_row), [this](T const& left_value, size_type right_row) {
+        return !right_on.is_null(right_row) && left_value < right_on.element<T>(right_row);
+      });
+    if (upper == first) { return JoinNoMatch; }
+    auto const candidate = *(upper - 1);
     return right_on.is_null(candidate) ? JoinNoMatch : candidate;
   }
 };
@@ -158,6 +154,8 @@ void asof_join::build_right_group_index(cuda::stream_ref stream)
     return;
   }
 
+  // Mark the first row and each change in adjacent by keys, then compact their indices into offsets.
+  // Append num_rows so group g occupies [offsets[g], offsets[g + 1]).
   auto const has_nulls  = cudf::has_nested_nulls(_right_by);
   auto const comparator = cudf::detail::row::equality::self_comparator{_right_by, stream, mr};
   auto const row_equal =
