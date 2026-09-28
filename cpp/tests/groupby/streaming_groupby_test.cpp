@@ -644,6 +644,133 @@ TYPED_TEST(StreamingGroupbySumTypedTest, TwoBatches)
   verify_against_groupby(keys, results, {batch1, batch2}, KEY_COL, reqs);
 }
 
+TEST_F(StreamingGroupbyTest, Decimal128SumSupport)
+{
+  auto const type = cudf::data_type{cudf::type_id::DECIMAL128, -2};
+  EXPECT_TRUE(cudf::groupby::is_streaming_groupby_supported(type, cudf::aggregation::SUM));
+  for (auto kind :
+       {cudf::aggregation::MIN, cudf::aggregation::MAX, cudf::aggregation::SUM_OVERFLOW}) {
+    EXPECT_FALSE(cudf::groupby::is_streaming_groupby_supported(type, kind));
+  }
+}
+
+TEST_F(StreamingGroupbyTest, Decimal128SumBatchesAndMerge)
+{
+  using DecimalColumn           = cudf::test::fixed_point_column_wrapper<__int128_t>;
+  constexpr __int128_t boundary = static_cast<__int128_t>(1) << 64;
+
+  for (auto exponent : {-2, 0, 3}) {
+    SCOPED_TRACE(exponent);
+    auto const scale = numeric::scale_type{exponent};
+    cudf::test::fixed_width_column_wrapper<int32_t> first_keys{0, 0, 1, 1, 2, 3, 4, 5};
+    DecimalColumn first_values{{boundary - 1, 2, -boundary + 1, -2, boundary, 99, 9, 0},
+                               {true, true, true, true, true, false, false, true},
+                               scale};
+    cudf::test::fixed_width_column_wrapper<int32_t> second_keys{0, 1, 2, 3, 4, 6};
+    DecimalColumn second_values{
+      {-1, 1, -boundary, 99, 7, boundary + 5}, {true, true, true, false, true, true}, scale};
+    cudf::table_view first_batch{{first_keys, first_values}};
+    cudf::table_view second_batch{{second_keys, second_values}};
+    auto requests = single_agg_req(1, cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+    cudf::test::fixed_width_column_wrapper<int32_t> expected_keys{0, 1, 2, 3, 4, 5, 6};
+    DecimalColumn expected_values{{boundary, -boundary, 0, 0, 7, 0, boundary + 5},
+                                  {true, true, true, false, true, true, true},
+                                  scale};
+
+    cudf::groupby::streaming_groupby accumulated(KEY_COL, requests, 16);
+    accumulated.aggregate(first_batch);
+    accumulated.aggregate(second_batch);
+    auto [keys, results] = accumulated.finalize();
+    check(keys, results, cudf::table_view{{expected_keys}}, {expected_values});
+
+    // Exercise the replacement-table merge used when an adapter grows capacity.
+    cudf::groupby::streaming_groupby original(KEY_COL, requests, 8);
+    original.aggregate(first_batch);
+    cudf::groupby::streaming_groupby replacement(KEY_COL, requests, 32);
+    replacement.aggregate(second_batch);
+    replacement.merge(original);
+    auto [merged_keys, merged_results] = replacement.finalize();
+    check(merged_keys, merged_results, cudf::table_view{{expected_keys}}, {expected_values});
+  }
+}
+
+TEST_F(StreamingGroupbyTest, Decimal128SumConcurrentAggregate)
+{
+  using DecimalColumn                = cudf::test::fixed_point_column_wrapper<__int128_t>;
+  constexpr int num_streams          = 4;
+  constexpr cudf::size_type num_rows = 32'768;
+  constexpr __int128_t magnitude     = (static_cast<__int128_t>(1) << 64) - 1;
+  auto const scale                   = numeric::scale_type{-2};
+
+  // Thousands of updates collide on each key, crossing the low-word boundary
+  // in both directions; key 2 cancels exactly even when updates interleave.
+  std::vector<int32_t> host_keys(num_rows);
+  std::vector<__int128_t> host_values(num_rows);
+  for (cudf::size_type row = 0; row < num_rows; ++row) {
+    host_keys[row]   = row % 4;
+    host_values[row] = row % 4 == 0   ? magnitude
+                       : row % 4 == 1 ? -magnitude
+                       : row % 4 == 2 ? (row % 8 == 2 ? magnitude : -magnitude)
+                                      : 123;
+  }
+  cudf::test::fixed_width_column_wrapper<int32_t> batch_keys(host_keys.begin(), host_keys.end());
+  std::vector<bool> valid(num_rows);
+  for (cudf::size_type row = 0; row < num_rows; ++row) {
+    valid[row] = row % 4 != 3;
+  }
+  DecimalColumn batch_values(host_values.begin(), host_values.end(), valid.begin(), scale);
+  cudf::table_view batch{{batch_keys, batch_values}};
+  auto requests = single_agg_req(1, cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+  cudf::groupby::streaming_groupby accumulated(KEY_COL, requests, num_rows);
+  accumulated.aggregate(batch);
+  // Complete initialization and input construction before independent streams read them.
+  CUDF_CUDA_TRY(cudaDeviceSynchronize());
+
+  int device{};
+  CUDF_CUDA_TRY(cudaGetDevice(&device));
+  std::vector<std::unique_ptr<cuda::stream>> streams;
+  for (int i = 0; i < num_streams; ++i) {
+    streams.push_back(std::make_unique<cuda::stream>(cuda::device_ref{device}));
+  }
+  std::atomic<int> ready{0};
+  std::atomic<bool> start{false};
+  std::vector<std::thread> threads;
+  std::vector<std::exception_ptr> errors(num_streams);
+  for (int i = 0; i < num_streams; ++i) {
+    threads.emplace_back([&, i] {
+      ready.fetch_add(1, std::memory_order_relaxed);
+      while (!start.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      try {
+        CUDF_CUDA_TRY(cudaSetDevice(device));
+        accumulated.aggregate(batch, *streams[i]);
+      } catch (...) {
+        errors[i] = std::current_exception();
+      }
+    });
+  }
+  while (ready.load(std::memory_order_relaxed) != num_streams) {
+    std::this_thread::yield();
+  }
+  start.store(true, std::memory_order_release);
+  for (auto& thread : threads) {
+    thread.join();
+  }
+  for (auto const& error : errors) {
+    EXPECT_FALSE(error);
+  }
+  for (auto const& stream : streams) {
+    stream->sync();
+  }
+
+  auto [keys, results]       = accumulated.finalize();
+  constexpr __int128_t total = magnitude * (num_rows / 4) * (num_streams + 1);
+  cudf::test::fixed_width_column_wrapper<int32_t> expected_keys{0, 1, 2, 3};
+  DecimalColumn expected_values{{total, -total, 0, 0}, {true, true, true, false}, scale};
+  check(keys, results, cudf::table_view{{expected_keys}}, {expected_values});
+}
+
 template <typename V>
 struct StreamingGroupbyMinTypedTest : public cudf::test::BaseFixture {};
 

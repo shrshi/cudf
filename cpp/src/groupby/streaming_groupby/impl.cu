@@ -125,16 +125,12 @@ void streaming_groupby::impl::initialize(table_view const& data, cuda::stream_re
 
   auto agg_requests = build_aggregation_requests(_requests_clone, data);
 
-  // TODO: streaming aggregation reuses the cudf hash-groupby element_aggregator,
-  // so it inherits the same atomic-support requirement.  In particular, decimal128
-  // MIN/MAX/SUM falls through to CUDF_UNREACHABLE because __int128 is not
-  // lock-free atomic.  Stateless cudf::groupby falls back to sort-based groupby
-  // in that case; streaming has no such fallback.  Until streaming has a
-  // non-atomic aggregator path (or 128-bit atomics gain hardware support), gate
-  // by the same predicate to fail loudly instead of silently producing garbage.
+  // Streaming reuses the hash-groupby element aggregator, including its Decimal128
+  // SUM implementation. Unlike stateless groupby, it cannot fall back to sorting
+  // for unsupported combinations such as Decimal128 MIN/MAX.
   CUDF_EXPECTS(detail::hash::can_use_hash_groupby(agg_requests),
                "streaming_groupby does not support this combination of value type and "
-               "aggregation kind (e.g. decimal128 MIN/MAX/SUM require 128-bit atomics).",
+               "aggregation kind (e.g. decimal128 MIN/MAX require 128-bit atomics).",
                std::invalid_argument);
 
   auto [values_view, agg_kinds_hv, agg_objects, is_intermediate, has_compound] =
@@ -404,8 +400,8 @@ bool is_streaming_groupby_supported(data_type values_type, aggregation::Kind kin
       break;
     default: return false;
   }
-  // decimal128 SUM/MIN/MAX needs 128-bit atomics, which aren't supported.
-  if ((kind == aggregation::SUM || kind == aggregation::MIN || kind == aggregation::MAX) &&
+  // Decimal128 SUM uses atomic addition; MIN/MAX have no supported atomic update.
+  if ((kind == aggregation::MIN || kind == aggregation::MAX) &&
       values_type.id() == type_id::DECIMAL128) {
     return false;
   }
