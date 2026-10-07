@@ -587,7 +587,7 @@ class streaming_groupby {
    * The caller must not access this object concurrently and must order all prior
    * operations (including reads by merge()) before `stream`. This call synchronizes
    * `stream` before releasing lookup structures. Output construction and subsequent
-   * state deallocation are asynchronous. The object is consumed even if finalization fails.
+   * state deallocation are asynchronous. The object is not consumed if a precondition check fails.
    *
    * @param stream CUDA stream ordered after all prior operations on this object
    * @param mr Device memory resource used to allocate the returned table and columns
@@ -595,13 +595,15 @@ class streaming_groupby {
    * @throws cudf::logic_error if no data has been accumulated or the object was consumed
    */
   [[nodiscard]] std::pair<std::unique_ptr<table>, std::vector<aggregation_result>>
-  finalize_and_release(cuda::stream_ref stream           = cudf::get_default_stream(),
-                       rmm::device_async_resource_ref mr = cudf::get_current_device_resource_ref());
+  finalize_and_release(
+    cuda::stream_ref stream           = cudf::get_default_stream(),
+    rmm::device_async_resource_ref mr = cudf::get_current_device_resource_ref()) &&;
 
   /**
    * @brief Returns the number of distinct keys accumulated so far.
    *
-   * Returns 0 before any successful `aggregate()` or `merge()` call.
+   * Returns 0 before any successful `aggregate()` or `merge()` call, after
+   * `finalize_and_release()`, or when called on a moved-from object.
    *
    * @return The current count of distinct keys in the persistent hash table
    */
