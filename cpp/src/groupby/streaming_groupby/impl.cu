@@ -9,6 +9,7 @@
 #include "groupby/hash/hash_compound_agg_finalizer.hpp"
 #include "groupby/hash/output_utils.hpp"
 
+#include <cudf/column/column_stream.hpp>
 #include <cudf/column/column_view.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
@@ -442,15 +443,25 @@ streaming_groupby::do_finalize_and_release(cuda::stream_ref stream,
   state->_key_set.reset();
   state->_key_loc.reset();
   state->_preprocessed_batches.clear();
-  try {
-    auto result = state->do_finalize(stream, mr);
-    // Finalization copies keys and accumulators asynchronously.
-    stream.sync();
-    return result;
-  } catch (...) {
-    stream.sync();
-    throw;
+  // Finalization reads these columns asynchronously. Rebind before enqueueing any
+  // copies so destruction is stream-ordered even if finalization throws.
+  auto rebind_table = [stream](std::unique_ptr<table>& source) {
+    if (!source) return;
+    auto columns = source->release();
+    for (auto& col : columns) {
+      col = cudf::rebind_stream(std::move(*col), stream);
+    }
+    source = std::make_unique<table>(std::move(columns));
+  };
+  for (auto& batch : state->_compacted_batches) {
+    rebind_table(batch);
   }
+  rebind_table(state->_empty_key_schema);
+  rebind_table(state->_agg_results);
+
+  auto result = state->do_finalize(stream, mr);
+  stream.sync();
+  return result;
 }
 
 size_type streaming_groupby::distinct_keys() const noexcept

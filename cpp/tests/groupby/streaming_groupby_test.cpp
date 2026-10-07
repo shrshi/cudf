@@ -1158,6 +1158,33 @@ TEST_F(StreamingGroupbyTest, FinalizeAndRelease)
   EXPECT_THROW(agg.merge(other), cudf::logic_error);
 }
 
+TEST_F(StreamingGroupbyTest, FinalizeAndReleaseDifferentStream)
+{
+  cudf::test::strings_column_wrapper keys1{{"a", "b", "c"}, {true, false, true}};
+  cudf::test::strings_column_wrapper keys2{"a", "d"};
+  cudf::test::fixed_width_column_wrapper<int32_t> values1{{2, 4, 0}, {true, true, false}};
+  cudf::test::fixed_width_column_wrapper<int32_t> values2{3, 5};
+  cudf::table_view const batch1{{keys1, values1}};
+  cudf::table_view const batch2{{keys2, values2}};
+  auto requests = single_agg_req(1, cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+
+  int device{};
+  CUDF_CUDA_TRY(cudaGetDevice(&device));
+  cuda::stream aggregate_stream{cuda::device_ref{device}};
+  cuda::stream finalize_stream{cuda::device_ref{device}};
+  cudf::get_default_stream().sync();
+  cudf::groupby::streaming_groupby agg{
+    KEY_COL, requests, DEFAULT_MAX_DISTINCT_KEYS, cudf::null_policy::INCLUDE};
+  agg.aggregate(batch1, aggregate_stream);
+  agg.aggregate(batch2, aggregate_stream);
+  aggregate_stream.sync();
+
+  auto [out_keys, out_results] = agg.finalize_and_release(finalize_stream);
+  verify_against_groupby(
+    out_keys, out_results, {batch1, batch2}, KEY_COL, requests, cudf::null_policy::INCLUDE);
+  EXPECT_EQ(agg.distinct_keys(), 0);
+}
+
 TEST_F(StreamingGroupbyTest, FinalizeAndReleaseEmpty)
 {
   cudf::test::fixed_width_column_wrapper<int32_t> keys{};
