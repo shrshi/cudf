@@ -436,8 +436,8 @@ streaming_groupby::do_finalize_and_release(cuda::stream_ref stream,
                                            rmm::device_async_resource_ref mr)
 {
   CUDF_EXPECTS(_impl != nullptr, "streaming_groupby has been consumed");
-  // Persistent buffers may have been allocated on different streams. All prior
-  // uses must finish before destroying lookup structures on their owning streams.
+  // The caller must order all prior uses before stream. Wait for those uses
+  // before destroying lookup structures on their original allocation streams.
   stream.sync();
   auto state = std::move(_impl);
   state->_key_set.reset();
@@ -459,9 +459,7 @@ streaming_groupby::do_finalize_and_release(cuda::stream_ref stream,
   rebind_table(state->_empty_key_schema);
   rebind_table(state->_agg_results);
 
-  auto result = state->do_finalize(stream, mr);
-  stream.sync();
-  return result;
+  return state->do_finalize(stream, mr);
 }
 
 size_type streaming_groupby::distinct_keys() const noexcept

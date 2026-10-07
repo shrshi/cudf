@@ -1180,6 +1180,7 @@ TEST_F(StreamingGroupbyTest, FinalizeAndReleaseDifferentStream)
   aggregate_stream.sync();
 
   auto [out_keys, out_results] = agg.finalize_and_release(finalize_stream);
+  finalize_stream.sync();
   verify_against_groupby(
     out_keys, out_results, {batch1, batch2}, KEY_COL, requests, cudf::null_policy::INCLUDE);
   EXPECT_EQ(agg.distinct_keys(), 0);

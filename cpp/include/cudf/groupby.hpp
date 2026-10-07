@@ -579,14 +579,15 @@ class streaming_groupby {
    * @brief Finalize results and release all accumulated state.
    *
    * Unlike finalize(), this is a terminal operation: lookup structures are released
-   * before output allocation, and all remaining state is released before returning.
+   * before output allocation, and deallocation of the remaining state is ordered
+   * after output construction on `stream`.
    * Subsequent aggregate(), merge(), finalize(), or finalize_and_release() calls on
    * this object throw. distinct_keys() returns zero afterward.
    *
    * The caller must not access this object concurrently and must order all prior
    * operations (including reads by merge()) before `stream`. This call synchronizes
-   * `stream` before releasing lookup structures and again before releasing state
-   * used to construct the output. The object is consumed even if finalization fails.
+   * `stream` before releasing lookup structures. Output construction and subsequent
+   * state deallocation are asynchronous. The object is consumed even if finalization fails.
    *
    * @param stream CUDA stream ordered after all prior operations on this object
    * @param mr Device memory resource used to allocate the returned table and columns
