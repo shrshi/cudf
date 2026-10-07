@@ -433,7 +433,7 @@ std::pair<std::unique_ptr<table>, std::vector<aggregation_result>> streaming_gro
 
 std::pair<std::unique_ptr<table>, std::vector<aggregation_result>>
 streaming_groupby::do_finalize_and_release(cuda::stream_ref stream,
-                                         rmm::device_async_resource_ref mr)
+                                           rmm::device_async_resource_ref mr)
 {
   CUDF_EXPECTS(_impl != nullptr, "streaming_groupby has been consumed");
   // Persistent buffers may have been allocated on different streams. All prior
