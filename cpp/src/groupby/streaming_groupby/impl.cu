@@ -318,7 +318,7 @@ std::pair<std::unique_ptr<table>, std::vector<aggregation_result>>
 streaming_groupby::impl::finalize_gathered(std::unique_ptr<table> keys,
                                            std::unique_ptr<table> agg_gathered,
                                            cuda::stream_ref stream,
-                                           rmm::device_async_resource_ref mr) const
+                                           cudf::memory_resources mr) const
 {
   // Group user requests by their target column in `agg_gathered` so the cache layout
   // produced by `extract_single_pass_aggs` matches the dedup'd `agg_gathered`.  Uses
@@ -375,9 +375,10 @@ streaming_groupby::impl::finalize_gathered(std::unique_ptr<table> keys,
     user_requests.push_back(std::move(ar));
   }
 
-  return {std::move(keys),
-          detail::extract_results(
-            std::span<aggregation_request const>{user_requests}, cache, stream, mr)};
+  return {
+    std::move(keys),
+    detail::extract_results(
+      std::span<aggregation_request const>{user_requests}, cache, stream, mr.get_output_mr())};
 }
 
 std::pair<std::unique_ptr<table>, std::vector<aggregation_result>>
@@ -390,14 +391,13 @@ streaming_groupby::impl::do_finalize(cuda::stream_ref stream,
 }
 
 std::pair<std::unique_ptr<table>, std::vector<aggregation_result>>
-streaming_groupby::impl::do_finalize_and_release(cuda::stream_ref stream,
-                                                 rmm::device_async_resource_ref mr)
+streaming_groupby::impl::do_finalize_and_release(cuda::stream_ref stream, cudf::memory_resources mr)
 {
-  auto keys = gather_distinct_keys(stream, mr);
+  auto keys = gather_distinct_keys(stream, mr.get_output_mr());
   _compacted_batches.clear();
   _empty_key_schema.reset();
 
-  auto agg_gathered = gather_agg_results(stream, mr);
+  auto agg_gathered = gather_agg_results(stream, mr.get_output_mr());
   _agg_results.reset();
 
   return finalize_gathered(std::move(keys), std::move(agg_gathered), stream, mr);
@@ -453,8 +453,7 @@ std::pair<std::unique_ptr<table>, std::vector<aggregation_result>> streaming_gro
 }
 
 std::pair<std::unique_ptr<table>, std::vector<aggregation_result>>
-streaming_groupby::do_finalize_and_release(cuda::stream_ref stream,
-                                           rmm::device_async_resource_ref mr)
+streaming_groupby::do_finalize_and_release(cuda::stream_ref stream, cudf::memory_resources mr)
 {
   CUDF_EXPECTS(_impl != nullptr, "streaming_groupby has been consumed or moved from.");
   CUDF_EXPECTS(_impl->_initialized, "Cannot finalize streaming_groupby with no accumulated data.");

@@ -38,8 +38,7 @@ std::pair<std::unique_ptr<table>, std::vector<aggregation_result>> streaming_gro
 }
 
 std::pair<std::unique_ptr<table>, std::vector<aggregation_result>>
-streaming_groupby::finalize_and_release(cuda::stream_ref stream,
-                                        rmm::device_async_resource_ref mr) &&
+streaming_groupby::finalize_and_release(cuda::stream_ref stream, cudf::memory_resources mr) &&
 {
   CUDF_FUNC_RANGE();
   return do_finalize_and_release(stream, mr);
