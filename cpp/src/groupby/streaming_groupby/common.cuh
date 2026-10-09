@@ -367,8 +367,15 @@ struct streaming_groupby::impl {
   [[nodiscard]] std::unique_ptr<table> gather_distinct_keys(
     rmm::cuda_stream_view stream, rmm::device_async_resource_ref mr) const;
 
+  [[nodiscard]] std::pair<std::unique_ptr<table>, std::vector<aggregation_result>>
+  finalize_gathered(std::unique_ptr<table> keys,
+                    std::unique_ptr<table> agg_gathered,
+                    rmm::cuda_stream_view stream,
+                    cudf::memory_resources mr) const;
   [[nodiscard]] std::pair<std::unique_ptr<table>, std::vector<aggregation_result>> do_finalize(
     rmm::cuda_stream_view stream, rmm::device_async_resource_ref mr) const;
+  [[nodiscard]] std::pair<std::unique_ptr<table>, std::vector<aggregation_result>>
+  do_finalize_and_release(rmm::cuda_stream_view stream, cudf::memory_resources mr);
 
   void do_merge(impl const& other, rmm::cuda_stream_view stream);
 };
