@@ -414,7 +414,16 @@ struct streaming_groupby::impl {
     size_type* batch_local_indices,
     cuda::stream_ref stream);
 
+  template <bool has_nested>
+  void find_existing(table_view const& batch_keys,
+                     bitmask_type const* batch_bitmask,
+                     size_type* target_indices,
+                     cuda::stream_ref stream);
+
   void do_aggregate(table_view const& data, cuda::stream_ref stream);
+  std::unique_ptr<column> do_aggregate_existing(table_view const& data,
+                                                cuda::stream_ref stream,
+                                                rmm::device_async_resource_ref mr);
 
   [[nodiscard]] std::unique_ptr<table> gather_agg_results(cuda::stream_ref stream,
                                                           rmm::device_async_resource_ref mr) const;

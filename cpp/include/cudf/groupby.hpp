@@ -535,6 +535,39 @@ class streaming_groupby {
   void aggregate(table_view const& data, cuda::stream_ref stream = cudf::get_default_stream());
 
   /**
+   * @brief Aggregate rows whose keys already exist, without inserting new keys.
+   *
+   * Returns a non-nullable INT32 column of batch-local row indices for keys not found in this
+   * object, in input order. Rows excluded by the null-key policy are neither aggregated nor
+   * returned. An uninitialized object returns all eligible rows without initializing its state.
+   * The number of distinct keys and the capacity remain unchanged. An empty batch returns an
+   * empty index column.
+   *
+   * This allows a caller to route unmatched rows to another streaming_groupby object without
+   * migrating existing state. The input must have the same schema as batches passed to aggregate().
+   * Unlike aggregate(), the batch may contain more rows than max_distinct_keys, provided their
+   * sum fits in size_type. The returned indices may be used as a gather map.
+   *
+   * Lookup is serialized with insertion by aggregate() and merge(); atomic aggregation updates
+   * may overlap across streams. Callers must coordinate lookup and insertion across different
+   * objects to ensure that each key has a single owner. This call synchronizes the supplied stream
+   * to determine the number of unmatched rows; aggregation updates may still be in flight on
+   * return.
+   *
+   * @param data Table containing both key and value columns
+   * @param stream CUDA stream used for device memory operations and kernel launches
+   * @param mr Device memory resource for the returned index column
+   * @return Batch-local indices of rows with keys absent from this object
+   * @throws std::invalid_argument if max_distinct_keys + data.num_rows() exceeds size_type's
+   * maximum
+   * @throws cudf::logic_error if the object was invalidated, consumed, or moved from
+   */
+  [[nodiscard]] std::unique_ptr<column> aggregate_existing(
+    table_view const& data,
+    cuda::stream_ref stream           = cudf::get_default_stream(),
+    rmm::device_async_resource_ref mr = cudf::get_current_device_resource_ref());
+
+  /**
    * @brief Merge another streaming_groupby's accumulated partial state into this one.
    *
    * Extracts the other object's accumulated intermediate state and merges it into this
@@ -613,6 +646,9 @@ class streaming_groupby {
   std::unique_ptr<impl> _impl;
 
   void do_aggregate(table_view const& data, cuda::stream_ref stream);
+  std::unique_ptr<column> do_aggregate_existing(table_view const& data,
+                                                cuda::stream_ref stream,
+                                                rmm::device_async_resource_ref mr);
   void do_merge(streaming_groupby const& other, cuda::stream_ref stream);
   [[nodiscard]] std::pair<std::unique_ptr<table>, std::vector<aggregation_result>> do_finalize(
     cuda::stream_ref stream, rmm::device_async_resource_ref mr) const;

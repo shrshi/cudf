@@ -159,4 +159,49 @@ streaming_groupby::impl::batch_insert_result streaming_groupby::impl::probe_and_
     std::move(target_indices), new_distinct_keys, std::move(bitmask_buffer)};
 }
 
+template <typename SetRef>
+struct find_existing_fn {
+  SetRef set_ref;
+  bitmask_type const* row_bitmask;
+  size_type offset;
+  size_type* target_indices;
+
+  __device__ void operator()(size_type row) const
+  {
+    auto target = cudf::detail::CUDF_SIZE_TYPE_SENTINEL;
+    if (!row_bitmask || cudf::bit_is_set(row_bitmask, row)) {
+      auto const found = set_ref.find(offset + row);
+      if (found != set_ref.end()) { target = *found; }
+    }
+    target_indices[row] = target;
+  }
+};
+
+template <bool has_nested>
+void streaming_groupby::impl::find_existing(table_view const& batch_keys,
+                                            bitmask_type const* batch_bitmask,
+                                            size_type* target_indices,
+                                            cuda::stream_ref stream)
+{
+  auto const mr       = cudf::get_current_device_resource_ref();
+  auto const has_null = cudf::nullate::DYNAMIC{_has_nullable_keys};
+  auto preprocessed   = cudf::detail::row::hash::preprocessed_table::create(batch_keys, stream, mr);
+  cuda::device_buffer<hash_value_type> hashes(stream, mr, batch_keys.num_rows(), cuda::no_init);
+  compute_batch_hashes(
+    preprocessed, has_null, batch_bitmask, hashes.data(), batch_keys.num_rows(), stream, mr);
+  auto const self = cudf::detail::row::equality::self_comparator{preprocessed}.equal_to<has_nested>(
+    has_null, null_equality::EQUAL);
+  auto cross =
+    build_cross_comparators<has_nested>(preprocessed, _preprocessed_batches, has_null, stream);
+  auto const comparator =
+    n_table_comparator{self, cross.data(), _key_loc->data(), _max_distinct_keys};
+  auto const ref = _key_set->ref(cuco::op::find)
+                     .rebind_hash_function(offset_cache_hasher{hashes.data(), _max_distinct_keys})
+                     .rebind_key_eq(comparator);
+  thrust::for_each_n(rmm::exec_policy_nosync(stream, mr),
+                     cuda::counting_iterator<size_type>{0},
+                     batch_keys.num_rows(),
+                     find_existing_fn{ref, batch_bitmask, _max_distinct_keys, target_indices});
+}
+
 }  // namespace cudf::groupby

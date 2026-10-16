@@ -184,6 +184,235 @@ TEST_F(StreamingGroupbyTest, SumTwoBatches)
   verify_against_groupby(keys, results, {batch1, batch2}, KEY_COL, reqs);
 }
 
+TEST_F(StreamingGroupbyTest, AggregateExistingDecimal128AcrossObjects)
+{
+  using fp128               = cudf::test::fixed_point_column_wrapper<__int128_t>;
+  constexpr __int128_t high = static_cast<__int128_t>(1) << 80;
+  auto const scale          = numeric::scale_type{-2};
+  auto reqs = single_agg_req(1, cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+  cudf::groupby::streaming_groupby first(KEY_COL, reqs, 2);
+  cudf::groupby::streaming_groupby second(KEY_COL, reqs, 2);
+  cudf::test::fixed_width_column_wrapper<int32_t> keys1{1, 2};
+  fp128 vals1{{high, 0}, {true, false}, scale};
+  first.aggregate(cudf::table_view{{keys1, vals1}});
+
+  // Lookup accepts a batch larger than capacity, even when the state is full.
+  // Unmatched indices are relative to the sliced batch, not the parent columns.
+  cudf::test::fixed_width_column_wrapper<int32_t> keys2{99, 1, 3, 1, 2, 4, 99};
+  fp128 vals2{{0, 2, high + 3, 0, 0, 0, 0}, {true, true, true, false, false, false, true}, scale};
+  auto const batch2 = cudf::slice(cudf::table_view{{keys2, vals2}}, {1, 6})[0];
+  auto unmatched    = first.aggregate_existing(batch2);
+  cudf::test::fixed_width_column_wrapper<int32_t> expected_unmatched{1, 4};
+  EXPECT_FALSE(unmatched->nullable());
+  CUDF_TEST_EXPECT_COLUMNS_EQUAL(expected_unmatched, *unmatched);
+  EXPECT_EQ(first.distinct_keys(), 2);
+  auto new_rows = cudf::gather(batch2, unmatched->view());
+  second.aggregate(new_rows->view());
+  EXPECT_EQ(second.distinct_keys(), 2);
+
+  cudf::test::fixed_width_column_wrapper<int32_t> keys3{3, 1, 4, 3, 2, 5};
+  fp128 vals3{{-high, -high, 7, 4, 0, 9}, {true, true, true, true, false, true}, scale};
+  cudf::table_view const batch3{{keys3, vals3}};
+  unmatched = first.aggregate_existing(batch3);
+  cudf::test::fixed_width_column_wrapper<int32_t> expected_first{0, 2, 3, 5};
+  CUDF_TEST_EXPECT_COLUMNS_EQUAL(expected_first, *unmatched);
+  auto remaining = cudf::gather(batch3, unmatched->view());
+  unmatched      = second.aggregate_existing(remaining->view());
+  cudf::test::fixed_width_column_wrapper<int32_t> expected_second{3};
+  CUDF_TEST_EXPECT_COLUMNS_EQUAL(expected_second, *unmatched);
+  EXPECT_EQ(first.distinct_keys(), 2);
+  EXPECT_EQ(second.distinct_keys(), 2);
+
+  auto [first_keys, first_results] = first.finalize();
+  fp128 first_sums{{2, 0}, {true, false}, scale};
+  check(first_keys, first_results, cudf::table_view{{keys1}}, {first_sums});
+  auto [second_keys, second_results] = second.finalize();
+  cudf::test::fixed_width_column_wrapper<int32_t> expected_keys{3, 4};
+  fp128 second_sums{{7, 7}, scale};
+  check(second_keys, second_results, cudf::table_view{{expected_keys}}, {second_sums});
+}
+
+TEST_F(StreamingGroupbyTest, AggregateExistingAcrossStreams)
+{
+  cudf::test::strings_column_wrapper keys1{"a", "b"};
+  cudf::test::fixed_width_column_wrapper<int32_t> values1{{2, 0}, {true, false}};
+  cudf::test::strings_column_wrapper keys2{"a", "c", "b", "a"};
+  cudf::test::fixed_width_column_wrapper<int32_t> values2{{4, 100, 6, 0},
+                                                          {true, true, true, false}};
+  cudf::test::strings_column_wrapper keys3{"a", "c"};
+  cudf::test::fixed_width_column_wrapper<int32_t> values3{6, 8};
+  cudf::table_view const batch1{{keys1, values1}};
+  cudf::table_view const batch2{{keys2, values2}};
+  cudf::table_view const batch3{{keys3, values3}};
+  std::vector<cudf::groupby::streaming_aggregation_request> requests;
+  requests.push_back(make_req(1, cudf::make_sum_aggregation<cudf::groupby_aggregation>()));
+  requests.push_back(make_req(
+    1, cudf::make_count_aggregation<cudf::groupby_aggregation>(cudf::null_policy::EXCLUDE)));
+  requests.push_back(make_req(1, cudf::make_mean_aggregation<cudf::groupby_aggregation>()));
+
+  int device{};
+  CUDF_CUDA_TRY(cudaGetDevice(&device));
+  cuda::stream stream_a{cuda::device_ref{device}};
+  cuda::stream stream_b{cuda::device_ref{device}};
+  cudf::get_default_stream().sync();
+  cudf::groupby::streaming_groupby agg{KEY_COL, requests, DEFAULT_MAX_DISTINCT_KEYS};
+  agg.aggregate(batch1, stream_a);
+  auto unmatched = agg.aggregate_existing(batch2, stream_b);
+  // No caller-side synchronization between lookup and insertion on different streams.
+  agg.aggregate(batch3, stream_a);
+  stream_a.sync();
+  stream_b.sync();
+
+  cudf::test::fixed_width_column_wrapper<int32_t> expected_unmatched{1};
+  CUDF_TEST_EXPECT_COLUMNS_EQUAL(expected_unmatched, *unmatched);
+  EXPECT_EQ(agg.distinct_keys(), 3);
+  auto [keys, results] = agg.finalize();
+  cudf::test::strings_column_wrapper expected_keys{"a", "b", "c"};
+  cudf::test::fixed_width_column_wrapper<int64_t> expected_sums{12, 6, 8};
+  cudf::test::fixed_width_column_wrapper<cudf::size_type> expected_counts{3, 1, 1};
+  cudf::test::fixed_width_column_wrapper<double> expected_means{4, 6, 8};
+  check(keys,
+        results,
+        cudf::table_view{{expected_keys}},
+        {expected_sums, expected_counts, expected_means});
+}
+
+TEST_F(StreamingGroupbyTest, AggregateExistingUninitializedAndEmpty)
+{
+  cudf::test::fixed_width_column_wrapper<int32_t> keys{{3, 0, 3, 1}, {true, false, true, true}};
+  cudf::test::fixed_width_column_wrapper<int32_t> values{10, 20, 30, 40};
+  cudf::table_view const batch{{keys, values}};
+  cudf::test::fixed_width_column_wrapper<int32_t> empty{};
+  cudf::table_view const empty_batch{{empty, empty}};
+  auto reqs = single_agg_req(1, cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+
+  for (auto policy : {cudf::null_policy::INCLUDE, cudf::null_policy::EXCLUDE}) {
+    SCOPED_TRACE(policy == cudf::null_policy::INCLUDE ? "INCLUDE" : "EXCLUDE");
+    cudf::groupby::streaming_groupby agg(KEY_COL, reqs, 2, policy);
+    auto unmatched = agg.aggregate_existing(empty_batch);
+    EXPECT_FALSE(unmatched->nullable());
+    CUDF_TEST_EXPECT_COLUMNS_EQUAL(empty, *unmatched);
+    unmatched = agg.aggregate_existing(batch);
+    cudf::test::fixed_width_column_wrapper<int32_t> included{0, 1, 2, 3};
+    cudf::test::fixed_width_column_wrapper<int32_t> excluded{0, 2, 3};
+    auto const expected = policy == cudf::null_policy::INCLUDE ? cudf::column_view{included}
+                                                               : cudf::column_view{excluded};
+    EXPECT_FALSE(unmatched->nullable());
+    CUDF_TEST_EXPECT_COLUMNS_EQUAL(expected, *unmatched);
+    EXPECT_EQ(agg.distinct_keys(), 0);
+    EXPECT_THROW(static_cast<void>(agg.finalize()), cudf::logic_error);
+
+    cudf::test::fixed_width_column_wrapper<int32_t> initial_keys{3};
+    cudf::test::fixed_width_column_wrapper<int32_t> initial_values{5};
+    agg.aggregate(cudf::table_view{{initial_keys, initial_values}});
+    unmatched = agg.aggregate_existing(empty_batch);
+    CUDF_TEST_EXPECT_COLUMNS_EQUAL(empty, *unmatched);
+    EXPECT_EQ(agg.distinct_keys(), 1);
+    auto [out_keys, results] = agg.finalize();
+    cudf::test::fixed_width_column_wrapper<int64_t> sums{5};
+    check(out_keys, results, cudf::table_view{{initial_keys}}, {sums});
+  }
+}
+
+TEST_F(StreamingGroupbyTest, AggregateExistingAllOrNoMatches)
+{
+  cudf::test::fixed_width_column_wrapper<int32_t> keys{1, 2};
+  cudf::test::fixed_width_column_wrapper<int32_t> values{10, 20};
+  cudf::table_view const batch{{keys, values}};
+  auto reqs = single_agg_req(1, cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+  cudf::groupby::streaming_groupby agg(KEY_COL, reqs, 2);
+  agg.aggregate(batch);
+  auto unmatched = agg.aggregate_existing(batch);
+  EXPECT_EQ(unmatched->size(), 0);
+  EXPECT_EQ(unmatched->view().head<cudf::size_type>(), nullptr);
+
+  cudf::test::fixed_width_column_wrapper<int32_t> absent_keys{3, 4};
+  unmatched = agg.aggregate_existing(cudf::table_view{{absent_keys, values}});
+  cudf::test::fixed_width_column_wrapper<int32_t> expected_unmatched{0, 1};
+  CUDF_TEST_EXPECT_COLUMNS_EQUAL(expected_unmatched, *unmatched);
+  EXPECT_EQ(agg.distinct_keys(), 2);
+  auto [out_keys, results] = agg.finalize();
+  cudf::test::fixed_width_column_wrapper<int64_t> sums{20, 40};
+  check(out_keys, results, cudf::table_view{{keys}}, {sums});
+}
+
+TEST_F(StreamingGroupbyTest, AggregateExistingNullKeys)
+{
+  cudf::test::fixed_width_column_wrapper<int32_t> initial_keys{{0, 1}, {false, true}};
+  cudf::test::fixed_width_column_wrapper<int32_t> initial_values{10, 20};
+  cudf::test::fixed_width_column_wrapper<int32_t> keys{{0, 2, 1, 0, 2},
+                                                       {false, true, true, false, true}};
+  cudf::test::fixed_width_column_wrapper<int32_t> values{3, 100, 4, 5, 200};
+  auto reqs = single_agg_req(1, cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+  cudf::test::fixed_width_column_wrapper<int32_t> expected_unmatched{1, 4};
+
+  for (auto policy : {cudf::null_policy::INCLUDE, cudf::null_policy::EXCLUDE}) {
+    SCOPED_TRACE(policy == cudf::null_policy::INCLUDE ? "INCLUDE" : "EXCLUDE");
+    cudf::groupby::streaming_groupby agg(KEY_COL, reqs, 2, policy);
+    agg.aggregate(cudf::table_view{{initial_keys, initial_values}});
+    auto unmatched = agg.aggregate_existing(cudf::table_view{{keys, values}});
+    EXPECT_FALSE(unmatched->nullable());
+    CUDF_TEST_EXPECT_COLUMNS_EQUAL(expected_unmatched, *unmatched);
+    EXPECT_EQ(agg.distinct_keys(), policy == cudf::null_policy::INCLUDE ? 2 : 1);
+    auto [out_keys, results] = agg.finalize();
+    cudf::test::fixed_width_column_wrapper<int64_t> sums{18, 24};
+    auto expected = cudf::table_view{{initial_keys, sums}};
+    if (policy == cudf::null_policy::EXCLUDE) { expected = cudf::slice(expected, {1, 2})[0]; }
+    check(out_keys, results, expected.select(KEY_COL), {expected.column(1)});
+  }
+}
+
+TEST_F(StreamingGroupbyTest, AggregateExistingStringAndStructKeys)
+{
+  cudf::test::strings_column_wrapper strings1{"a", "b"};
+  cudf::test::strings_column_wrapper strings2{"c", "b", "a", "b", "d"};
+  cudf::test::fixed_width_column_wrapper<int32_t> child1{1, 2};
+  cudf::test::fixed_width_column_wrapper<int32_t> child2{3, 2, 1, 2, 4};
+  cudf::test::structs_column_wrapper structs1{{strings1, child1}};
+  cudf::test::structs_column_wrapper structs2{{strings2, child2}};
+  cudf::test::fixed_width_column_wrapper<int32_t> values1{10, 20};
+  cudf::test::fixed_width_column_wrapper<int32_t> values2{100, 3, 4, 5, 200};
+  cudf::test::fixed_width_column_wrapper<int32_t> expected_unmatched{0, 4};
+  cudf::test::fixed_width_column_wrapper<int64_t> expected_sums{14, 28};
+  auto reqs = single_agg_req(1, cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+
+  for (bool nested : {false, true}) {
+    SCOPED_TRACE(nested);
+    auto const first_keys = nested ? cudf::column_view{structs1} : cudf::column_view{strings1};
+    auto const next_keys  = nested ? cudf::column_view{structs2} : cudf::column_view{strings2};
+    cudf::groupby::streaming_groupby agg(KEY_COL, reqs, 2);
+    agg.aggregate(cudf::table_view{{first_keys, values1}});
+    auto unmatched = agg.aggregate_existing(cudf::table_view{{next_keys, values2}});
+    CUDF_TEST_EXPECT_COLUMNS_EQUAL(expected_unmatched, *unmatched);
+    EXPECT_EQ(agg.distinct_keys(), 2);
+    auto [out_keys, results] = agg.finalize();
+    check(out_keys, results, cudf::table_view{{first_keys}}, {expected_sums});
+  }
+}
+
+TEST_F(StreamingGroupbyTest, AggregateExistingRejectsConsumedAndInvalidated)
+{
+  cudf::test::fixed_width_column_wrapper<int32_t> keys{1, 2};
+  cudf::test::fixed_width_column_wrapper<int32_t> values{10, 20};
+  cudf::table_view const batch{{keys, values}};
+  cudf::test::fixed_width_column_wrapper<int32_t> empty{};
+  cudf::table_view const empty_batch{{empty, empty}};
+  auto reqs = single_agg_req(1, cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+  cudf::groupby::streaming_groupby consumed(KEY_COL, reqs, 2);
+  consumed.aggregate(batch);
+  std::ignore = std::move(consumed).finalize_and_release();
+  EXPECT_THROW(static_cast<void>(consumed.aggregate_existing(batch)), cudf::logic_error);
+  EXPECT_THROW(static_cast<void>(consumed.aggregate_existing(empty_batch)), cudf::logic_error);
+
+  cudf::groupby::streaming_groupby invalidated(KEY_COL, reqs, 2);
+  invalidated.aggregate(batch);
+  cudf::test::fixed_width_column_wrapper<int32_t> new_key{3};
+  cudf::test::fixed_width_column_wrapper<int32_t> new_value{30};
+  EXPECT_THROW(invalidated.aggregate(cudf::table_view{{new_key, new_value}}), cudf::logic_error);
+  EXPECT_THROW(static_cast<void>(invalidated.aggregate_existing(batch)), cudf::logic_error);
+  EXPECT_THROW(static_cast<void>(invalidated.aggregate_existing(empty_batch)), cudf::logic_error);
+}
+
 TEST_F(StreamingGroupbyTest, MinMaxTwoBatches)
 {
   using K = int32_t;

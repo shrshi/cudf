@@ -443,6 +443,14 @@ void streaming_groupby::do_aggregate(table_view const& data, cuda::stream_ref st
   _impl->do_aggregate(data, stream);
 }
 
+std::unique_ptr<column> streaming_groupby::do_aggregate_existing(table_view const& data,
+                                                                 cuda::stream_ref stream,
+                                                                 rmm::device_async_resource_ref mr)
+{
+  CUDF_EXPECTS(_impl != nullptr, "streaming_groupby has been consumed or moved from.");
+  return _impl->do_aggregate_existing(data, stream, mr);
+}
+
 void streaming_groupby::do_merge(streaming_groupby const& other, cuda::stream_ref stream)
 {
   CUDF_EXPECTS(_impl != nullptr && other._impl != nullptr,

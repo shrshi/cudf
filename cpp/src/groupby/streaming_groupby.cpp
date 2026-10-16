@@ -24,6 +24,14 @@ void streaming_groupby::aggregate(table_view const& data, cuda::stream_ref strea
   do_aggregate(data, stream);
 }
 
+std::unique_ptr<column> streaming_groupby::aggregate_existing(table_view const& data,
+                                                              cuda::stream_ref stream,
+                                                              rmm::device_async_resource_ref mr)
+{
+  CUDF_FUNC_RANGE();
+  return do_aggregate_existing(data, stream, mr);
+}
+
 void streaming_groupby::merge(streaming_groupby const& other, cuda::stream_ref stream)
 {
   CUDF_FUNC_RANGE();
