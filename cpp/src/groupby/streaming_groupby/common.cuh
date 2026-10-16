@@ -325,7 +325,7 @@ struct streaming_groupby::impl {
   /// Each entry is {batch_id, row_in_compacted_batch}.
   std::unique_ptr<cuda::device_buffer<key_location_t>> _key_loc;
 
-  std::vector<size_type> _request_first_agg_offset;
+  std::vector<size_type> _request_value_offset;
   std::vector<aggregation::Kind> _agg_kinds;
   std::vector<std::unique_ptr<aggregation>> _agg_objects;
   std::vector<int8_t> _is_agg_intermediate;

@@ -235,23 +235,25 @@ void streaming_groupby::impl::initialize(table_view const& data, cuda::stream_re
     CUDF_EXPECTS(found, "Internal error: agg column not found in input data.");
   }
 
-  // For each user streaming request, locate the offset in the dedup'd `_agg_kinds`
-  // where its first decomposed simple agg lives (matched by kind + column identity).
-  _request_first_agg_offset.reserve(_requests_clone.size());
+  // Use one representative accumulator as the cache key for all requests on an input
+  // column. Grouping by each request's first aggregation would split shared states
+  // (e.g. SUM, COUNT and MEAN) when reconstructing the finalization cache.
+  _request_value_offset.reserve(_requests_clone.size());
   for (auto const& req : _requests_clone) {
     auto const& target_col = data.column(req.column_index);
-    auto const first_kind =
-      detail::hash::get_simple_aggregations(*req.aggregation, target_col.type()).front();
-    bool found = false;
+    size_type offset       = -1;
     for (size_type k = 0; k < static_cast<size_type>(_agg_kinds.size()); ++k) {
-      if (_agg_kinds[k] == first_kind &&
-          cudf::detail::is_shallow_equivalent(values_view.column(k), target_col)) {
-        _request_first_agg_offset.push_back(k);
-        found = true;
-        break;
+      if (cudf::detail::is_shallow_equivalent(values_view.column(k), target_col)) {
+        offset = k;
+        // Counts discard input type and nullability; prefer a value accumulator
+        // so compound finalizers can still identify all-null groups.
+        if (_agg_kinds[k] != aggregation::COUNT_VALID && _agg_kinds[k] != aggregation::COUNT_ALL) {
+          break;
+        }
       }
     }
-    CUDF_EXPECTS(found, "Internal error: request's first simple agg not found.");
+    CUDF_EXPECTS(offset >= 0, "Internal error: request's input column not found.");
+    _request_value_offset.push_back(offset);
   }
 
   // Companion vector: indexed by dense ID, one {batch_id, row} entry per distinct key.
@@ -329,7 +331,7 @@ streaming_groupby::impl::finalize_gathered(std::unique_ptr<table> keys,
   std::vector<aggregation_request> column_grouped;
   std::vector<size_type> group_offsets;
   for (size_t i = 0; i < _requests_clone.size(); ++i) {
-    auto const offset = _request_first_agg_offset[i];
+    auto const offset = _request_value_offset[i];
     auto cloned       = std::unique_ptr<groupby_aggregation>{
       dynamic_cast<groupby_aggregation*>(_requests_clone[i].aggregation->clone().release())};
     auto const it = std::find(group_offsets.begin(), group_offsets.end(), offset);
@@ -348,6 +350,8 @@ streaming_groupby::impl::finalize_gathered(std::unique_ptr<table> keys,
   auto [values_view_fin, agg_kinds_fin, agg_objects_fin, is_intermediate_fin, has_compound_fin] =
     detail::hash::extract_single_pass_aggs(column_grouped, stream);
 
+  CUDF_EXPECTS(agg_objects_fin.size() == static_cast<size_t>(agg_gathered->num_columns()),
+               "Streaming finalization must preserve the accumulator layout.");
   cudf::detail::result_cache cache(_agg_kinds.size());
   detail::hash::finalize_output(values_view_fin, agg_objects_fin, agg_gathered, &cache, stream);
 
@@ -370,7 +374,7 @@ streaming_groupby::impl::finalize_gathered(std::unique_ptr<table> keys,
   user_requests.reserve(_requests_clone.size());
   for (size_t i = 0; i < _requests_clone.size(); ++i) {
     aggregation_request ar;
-    ar.values = agg_gathered_view.column(_request_first_agg_offset[i]);
+    ar.values = agg_gathered_view.column(_request_value_offset[i]);
     ar.aggregations.push_back(std::unique_ptr<groupby_aggregation>{
       dynamic_cast<groupby_aggregation*>(_requests_clone[i].aggregation->clone().release())});
     user_requests.push_back(std::move(ar));

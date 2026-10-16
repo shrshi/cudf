@@ -1056,6 +1056,33 @@ TEST_F(StreamingGroupbyTest, SumAndMeanOnSameColumn)
   verify_against_groupby(keys, results, {batch1, batch2}, KEY_COL, reqs);
 }
 
+TEST_F(StreamingGroupbyTest, SharedCompoundStatesFinalization)
+{
+  cudf::test::fixed_width_column_wrapper<int32_t> input_keys{1, 2, 1, 3};
+  cudf::test::fixed_width_column_wrapper<double> values{{1.5, 2.5, 4.5, 0.0},
+                                                        {true, true, true, false}};
+  cudf::table_view const batch{{input_keys, values}};
+  for (bool count_first : {false, true}) {
+    for (bool terminal : {false, true}) {
+      SCOPED_TRACE(count_first);
+      SCOPED_TRACE(terminal);
+      std::vector<cudf::groupby::streaming_aggregation_request> requests;
+      auto add_count = [&] {
+        requests.push_back(make_req(
+          1, cudf::make_count_aggregation<cudf::groupby_aggregation>(cudf::null_policy::EXCLUDE)));
+      };
+      if (count_first) { add_count(); }
+      requests.push_back(make_req(1, cudf::make_sum_aggregation<cudf::groupby_aggregation>()));
+      if (!count_first) { add_count(); }
+      requests.push_back(make_req(1, cudf::make_mean_aggregation<cudf::groupby_aggregation>()));
+      cudf::groupby::streaming_groupby agg(KEY_COL, requests, DEFAULT_MAX_DISTINCT_KEYS);
+      agg.aggregate(batch);
+      auto [keys, results] = terminal ? std::move(agg).finalize_and_release() : agg.finalize();
+      verify_against_groupby(keys, results, {batch}, KEY_COL, requests);
+    }
+  }
+}
+
 // Test that many small batches accumulate correctly within the fixed-capacity key table.
 TEST_F(StreamingGroupbyTest, ManySmallBatches)
 {
