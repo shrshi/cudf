@@ -22,6 +22,7 @@
 
 #include <rmm/mr/statistics_resource_adaptor.hpp>
 
+#include <cuda/iterator>
 #include <cuda/stream>
 #include <cuda_runtime_api.h>
 
@@ -275,6 +276,53 @@ TEST_F(StreamingGroupbyTest, AggregateExistingAcrossStreams)
         results,
         cudf::table_view{{expected_keys}},
         {expected_sums, expected_counts, expected_means});
+}
+
+TEST_F(StreamingGroupbyTest, AggregateExistingPartialsGrowAcrossStreams)
+{
+  auto const rows       = cuda::counting_iterator<int32_t>{0};
+  auto const seed_key   = cuda::transform_iterator{rows, [](auto i) { return i % 2; }};
+  auto const lookup_key = cuda::transform_iterator{rows, [](auto i) { return i % 4; }};
+  auto const valid      = cuda::transform_iterator{rows, [](auto i) { return i % 3 != 0; }};
+  cudf::test::fixed_width_column_wrapper<int32_t> seed_keys(seed_key, seed_key + 4096);
+  cudf::test::fixed_width_column_wrapper<int32_t> values(rows + 1, rows + 4097);
+  cudf::test::fixed_width_column_wrapper<int32_t> lookup_keys(lookup_key, lookup_key + 4096);
+  cudf::test::fixed_width_column_wrapper<int32_t> lookup_values(rows + 1, rows + 4097, valid);
+  cudf::test::fixed_width_column_wrapper<int32_t> new_keys(rows + 2, rows + 66);
+  cudf::test::fixed_width_column_wrapper<int32_t> new_values(rows + 1, rows + 65);
+  cudf::table_view const seed{{seed_keys, values}};
+  cudf::table_view const lookup{{lookup_keys, lookup_values}};
+  cudf::table_view const growth{{new_keys, new_values}};
+  std::vector<cudf::groupby::streaming_aggregation_request> requests;
+  requests.push_back(make_req(1, cudf::make_sum_aggregation<cudf::groupby_aggregation>()));
+  requests.push_back(make_req(
+    1, cudf::make_count_aggregation<cudf::groupby_aggregation>(cudf::null_policy::EXCLUDE)));
+  requests.push_back(make_req(1, cudf::make_mean_aggregation<cudf::groupby_aggregation>()));
+
+  int device{};
+  CUDF_CUDA_TRY(cudaGetDevice(&device));
+  cuda::stream stream_a{cuda::device_ref{device}};
+  cuda::stream stream_b{cuda::device_ref{device}};
+  cudf::get_default_stream().sync();
+  cudf::groupby::streaming_groupby agg{KEY_COL, requests, 4096};
+  // A large batch with two groups creates multiple partial accumulators per group.
+  agg.aggregate(seed, stream_a);
+  auto unmatched = agg.aggregate_existing(lookup, stream_b);
+  EXPECT_EQ(agg.distinct_keys(), 2);
+  // Grow from two to 66 groups, changing capacity and partial pitch after lookup.
+  agg.aggregate(growth, stream_a);
+  auto [keys, results] = std::move(agg).finalize_and_release(stream_b);
+  stream_a.sync();
+  stream_b.sync();
+
+  auto const absent =
+    cuda::transform_iterator{rows, [](auto i) { return (i / 2) * 4 + i % 2 + 2; }};
+  cudf::test::fixed_width_column_wrapper<int32_t> expected_unmatched(absent, absent + 2048);
+  CUDF_TEST_EXPECT_COLUMNS_EQUAL(expected_unmatched, *unmatched);
+  auto const present = cuda::transform_iterator{rows, [](auto i) { return (i / 2) * 4 + i % 2; }};
+  cudf::test::fixed_width_column_wrapper<int32_t> matched_indices(present, present + 2048);
+  auto matched = cudf::gather(lookup, matched_indices);
+  verify_against_groupby(keys, results, {seed, matched->view(), growth}, KEY_COL, requests);
 }
 
 TEST_F(StreamingGroupbyTest, AggregateExistingUninitializedAndEmpty)
@@ -1238,7 +1286,7 @@ TEST_F(StreamingGroupbyTest, InternalDuplicatesDoNotCorruptStaging)
   using V = int32_t;
 
   // Batch 1: key 1 is a duplicate at position 1, so key 3 ends up at position 3
-  // (_num_unique_keys == 3).  Without the fix, batch 2 writes at offset 3, overwriting
+  // (three distinct keys).  Without the fix, batch 2 writes at offset 3, overwriting
   // the canonical slot for key 3 with key 4, making them appear identical.
   cudf::test::fixed_width_column_wrapper<K> keys1{1, 1, 2, 3};
   cudf::test::fixed_width_column_wrapper<V> vals1{10, 10, 20, 30};

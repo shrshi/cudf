@@ -53,6 +53,23 @@ struct hash_set_ref {
   cuda::std::uint32_t capacity;
   cuda::std::uint32_t max_probes;  ///< Probes after which the set is declared full
 
+  /// Returns the matching slot without insertion, or capacity if the key is absent.
+  template <typename Equal>
+  __device__ cuda::std::uint32_t find(size_type row,
+                                      hash_value_type hash_value,
+                                      Equal const& equal) const
+  {
+    auto slot = __umulhi(__brev(hash_value), capacity);
+    for (cuda::std::uint32_t step = 0; step < max_probes; ++step) {
+      auto const current = cuda::atomic_ref<slot_type, cuda::thread_scope_device>{slots[slot]}.load(
+        cuda::memory_order_relaxed);
+      if (current == cudf::detail::CUDF_SIZE_TYPE_SENTINEL) { return capacity; }
+      if (equal(row, current)) { return slot; }
+      slot = slot + 1 == capacity ? 0 : slot + 1;
+    }
+    return capacity;
+  }
+
   /**
    * @brief Returns the slot owned by the key of `row`, claiming an empty slot when the key is new.
    *

@@ -5,22 +5,21 @@
 
 #include "common.cuh"
 #include "groupby/common/utils.hpp"
-#include "groupby/hash/single_pass_functors.cuh"
+#include "warp_aggregate.hpp"
 
 #include <cudf/column/column_factories.hpp>
-#include <cudf/table/table_device_view.cuh>
 #include <cudf/table/table_view.hpp>
 #include <cudf/utilities/error.hpp>
 
 #include <rmm/exec_policy.hpp>
 
-#include <cuda/buffer>
 #include <cuda/iterator>
 #include <cuda/stream>
 #include <thrust/copy.h>
 #include <thrust/fill.h>
-#include <thrust/for_each.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <mutex>
 #include <string>
@@ -44,41 +43,40 @@ void streaming_groupby::impl::do_aggregate(table_view const& data, cuda::stream_
                "Transient key encoding (max_distinct_keys + batch_size) would overflow size_type.",
                std::invalid_argument);
 
-  // The transient key encoding is only valid while a single insertion is in flight, so
-  // insertion is serialized across concurrent callers on the host and, via the event, on the
-  // device.  The aggregation below is per-group atomic and runs unserialized.
-  auto const result = [&] {
-    std::lock_guard const lock{_insert_mutex};
-
-    // Re-check under the lock: another caller may have invalidated the object since the
-    // fail-fast check above.
-    ensure_not_invalidated();
-
+  // Keep host bookkeeping locked until every result use is enqueued and registered.
+  std::lock_guard const lock{_insert_mutex};
+  ensure_not_invalidated();
+  bool insertion_started = false;
+  try {
     if (!_initialized) { initialize(data, stream); }
-
+    // An initial tiny batch must not permanently limit later batches to one partial. Increasing
+    // the budget only after doubling bounds how often stable groups require a reshape.
+    auto const batch_budget = std::max<size_type>(1, batch_size / partial_aggregation_block_size);
+    if (_partial_budget == 0 || static_cast<int64_t>(batch_budget) >= 2LL * _partial_budget) {
+      _partial_budget = batch_budget;
+    }
     auto const batch_keys = data.select(_key_indices);
-
     update_nullable_state(batch_keys);
-
     if (!_key_set) { create_key_set(stream); }
-
     _insert_done.wait(stream);
-    auto inserted = probe_and_insert(batch_keys, stream);
+    insertion_started  = true;
+    auto const targets = probe_and_insert(batch_keys, true, stream);
     _insert_done.record(stream);
-    return inserted;
-  }();
+    _results_read_done.wait(stream);
 
-  auto const values_view = data.select(_value_col_indices);
-  auto const d_values    = table_device_view::create(values_view, stream);
-
-  auto const temp_mr      = cudf::get_current_device_resource_ref();
-  auto const num_agg_cols = static_cast<int64_t>(_agg_kinds.size());
-  thrust::for_each_n(
-    rmm::exec_policy_nosync(stream, temp_mr),
-    cuda::counting_iterator<int64_t>(0),
-    static_cast<int64_t>(batch_size) * num_agg_cols,
-    detail::hash::compute_single_pass_aggs_dense_output_fn{
-      result.target_indices.begin(), _d_agg_kinds->data(), *d_values, *_d_agg_results});
+    compute_warp_aggregates(data.select(_value_col_indices),
+                            _agg_kinds,
+                            {targets.data(), targets.size()},
+                            _agg_results->mutable_view(),
+                            stream,
+                            cudf::get_current_device_resource_ref());
+    record_aggregate_completion(stream);
+  } catch (...) {
+    if (insertion_started) { _invalidated = true; }
+    // Do not let partially enqueued writes escape tracking before a subsequent resize/read.
+    static_cast<void>(cudaStreamSynchronize(stream.get()));
+    throw;
+  }
 }
 
 namespace {
@@ -106,51 +104,59 @@ std::unique_ptr<column> streaming_groupby::impl::do_aggregate_existing(
                "Lookup key encoding (max_distinct_keys + batch_size) would overflow size_type.",
                std::invalid_argument);
 
-  auto const temp_mr = cudf::get_current_device_resource_ref();
-  auto const keys    = data.select(_key_indices);
-  update_nullable_state(keys);
-  auto [mask, row_bitmask] =
-    _has_nullable_keys && _null_handling == null_policy::EXCLUDE
-      ? detail::compute_row_bitmask(keys, stream)
-      : std::pair<cuda::device_buffer<std::byte>, bitmask_type const*>{
-          cudf::create_null_mask(0, mask_state::UNALLOCATED, stream), nullptr};
-  cuda::device_buffer<size_type> targets(stream, temp_mr, size, cuda::no_init);
-  _insert_done.wait(stream);
-  if (_distinct_keys.load(std::memory_order_relaxed) == 0) {
-    thrust::fill(rmm::exec_policy_nosync(stream, temp_mr),
-                 targets.begin(),
-                 targets.end(),
-                 cudf::detail::CUDF_SIZE_TYPE_SENTINEL);
-  } else if (_has_nested_keys) {
-    find_existing<true>(keys, row_bitmask, targets.data(), stream);
-  } else {
-    find_existing<false>(keys, row_bitmask, targets.data(), stream);
-  }
-  _insert_done.record(stream);
+  try {
+    auto const temp_mr = cudf::get_current_device_resource_ref();
+    auto const keys    = data.select(_key_indices);
+    update_nullable_state(keys);
+    auto [mask, row_bitmask] =
+      _has_nullable_keys && _null_handling == null_policy::EXCLUDE
+        ? detail::compute_row_bitmask(keys, stream)
+        : std::pair<cuda::device_buffer<std::byte>, bitmask_type const*>{
+            cudf::create_null_mask(0, mask_state::UNALLOCATED, stream), nullptr};
+    cuda::device_buffer<size_type> targets(stream, temp_mr, size, cuda::no_init);
+    _insert_done.wait(stream);
+    if (_distinct_keys.load(std::memory_order_relaxed) == 0) {
+      thrust::fill(rmm::exec_policy_nosync(stream, temp_mr),
+                   targets.begin(),
+                   targets.end(),
+                   cudf::detail::CUDF_SIZE_TYPE_SENTINEL);
+    } else if (_has_nested_keys) {
+      find_existing<true>(keys, row_bitmask, targets.data(), stream);
+    } else {
+      find_existing<false>(keys, row_bitmask, targets.data(), stream);
+    }
+    _insert_done.record(stream);
 
-  rmm::device_buffer unmatched(static_cast<std::size_t>(size) * sizeof(size_type), stream, mr);
-  auto const unmatched_data  = static_cast<size_type*>(unmatched.data());
-  auto const end             = thrust::copy_if(rmm::exec_policy(stream, temp_mr),
-                                   cuda::counting_iterator<size_type>{0},
-                                   cuda::counting_iterator<size_type>{size},
-                                   unmatched_data,
-                                   is_unmatched_fn{targets.data(), row_bitmask});
-  auto const unmatched_count = static_cast<size_type>(end - unmatched_data);
+    rmm::device_buffer unmatched(static_cast<std::size_t>(size) * sizeof(size_type), stream, mr);
+    auto const unmatched_data  = static_cast<size_type*>(unmatched.data());
+    auto const end             = thrust::copy_if(rmm::exec_policy(stream, temp_mr),
+                                     cuda::counting_iterator<size_type>{0},
+                                     cuda::counting_iterator<size_type>{size},
+                                     unmatched_data,
+                                     is_unmatched_fn{targets.data(), row_bitmask});
+    auto const unmatched_count = static_cast<size_type>(end - unmatched_data);
 
-  if (_distinct_keys.load(std::memory_order_relaxed) != 0) {
-    auto const values = table_device_view::create(data.select(_value_col_indices), stream);
-    thrust::for_each_n(rmm::exec_policy_nosync(stream, temp_mr),
-                       cuda::counting_iterator<int64_t>{0},
-                       static_cast<int64_t>(size) * _agg_kinds.size(),
-                       detail::hash::compute_single_pass_aggs_dense_output_fn{
-                         targets.begin(), _d_agg_kinds->data(), *values, *_d_agg_results});
+    if (_distinct_keys.load(std::memory_order_relaxed) != 0) {
+      _results_read_done.wait(stream);
+      compute_warp_aggregates(data.select(_value_col_indices),
+                              _agg_kinds,
+                              {targets.data(), targets.size()},
+                              _agg_results->mutable_view(),
+                              stream,
+                              temp_mr);
+      record_aggregate_completion(stream);
+    }
+    if (unmatched_count == 0) { return make_empty_column(data_type{type_id::INT32}); }
+    return std::make_unique<column>(data_type{type_id::INT32},
+                                    unmatched_count,
+                                    std::move(unmatched),
+                                    cudf::create_null_mask(0, mask_state::UNALLOCATED, stream, mr),
+                                    0);
+  } catch (...) {
+    // Complete any enqueued reads or updates before later calls can resize state.
+    static_cast<void>(cudaStreamSynchronize(stream.get()));
+    throw;
   }
-  if (unmatched_count == 0) { return make_empty_column(data_type{type_id::INT32}); }
-  return std::make_unique<column>(data_type{type_id::INT32},
-                                  unmatched_count,
-                                  std::move(unmatched),
-                                  cudf::create_null_mask(0, mask_state::UNALLOCATED, stream, mr),
-                                  0);
 }
 
 }  // namespace cudf::groupby
