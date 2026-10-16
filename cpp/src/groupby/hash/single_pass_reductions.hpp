@@ -70,6 +70,8 @@ std::unique_ptr<column> compute_reduction(reduction_context const& ctx,
 // Suppress implicit instantiation in the frontend and other reducer translation units.
 extern template std::unique_ptr<column> compute_reduction<aggregation::SUM>(
   reduction_context const& ctx, cuda::stream_ref stream, cudf::memory_resources mr);
+extern template std::unique_ptr<column> compute_reduction<aggregation::SUM_WIDE>(
+  reduction_context const& ctx, cuda::stream_ref stream, cudf::memory_resources mr);
 extern template std::unique_ptr<column> compute_reduction<aggregation::PRODUCT>(
   reduction_context const& ctx, cuda::stream_ref stream, cudf::memory_resources mr);
 extern template std::unique_ptr<column> compute_reduction<aggregation::SUM_OF_SQUARES>(

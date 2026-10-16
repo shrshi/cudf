@@ -72,6 +72,7 @@ constexpr bool is_hash_aggregation(aggregation::Kind k)
 {
   switch (k) {
     case aggregation::SUM:
+    case aggregation::SUM_WIDE:
     case aggregation::SUM_OVERFLOW:
     case aggregation::SUM_OF_SQUARES:
     case aggregation::PRODUCT:

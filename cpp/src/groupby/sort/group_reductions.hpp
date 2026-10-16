@@ -45,6 +45,15 @@ std::unique_ptr<column> group_sum(column_view const& values,
                                   rmm::device_async_resource_ref mr);
 
 /**
+ * @brief Sums grouped Decimal64 values into Decimal128 results, preserving the scale.
+ */
+std::unique_ptr<column> group_sum_wide(column_view const& values,
+                                       size_type num_groups,
+                                       cudf::device_span<size_type const> group_labels,
+                                       cuda::stream_ref stream,
+                                       rmm::device_async_resource_ref mr);
+
+/**
  * @brief Internal API to calculate groupwise sum with overflow detection.
  *
  * Returns a STRUCT column with two children: the (wrapping) sum and a BOOL8 overflow flag that is

@@ -13,8 +13,12 @@
 
 #include <cudf/aggregation.hpp>
 #include <cudf/copying.hpp>
+#include <cudf/dictionary/encode.hpp>
 #include <cudf/sorting.hpp>
 #include <cudf/table/table_view.hpp>
+
+#include <limits>
+#include <vector>
 
 using namespace cudf::test::iterators;
 
@@ -244,6 +248,187 @@ TYPED_TEST(GroupBySumFixedPointTest, GroupByHashSumDecimalAsValue)
 
     auto agg8 = cudf::make_product_aggregation<cudf::groupby_aggregation>();
     EXPECT_THROW(test_single_agg(keys, vals, expect_keys, {}, std::move(agg8)), cudf::logic_error);
+  }
+}
+
+namespace {
+void test_sum_wide(cudf::column_view keys,
+                   cudf::column_view values,
+                   cudf::column_view expected_keys,
+                   cudf::column_view expected_values,
+                   cudf::null_policy null_keys = cudf::null_policy::EXCLUDE)
+{
+  for (auto const use_sort : {force_use_sort_impl::NO, force_use_sort_impl::YES}) {
+    SCOPED_TRACE(use_sort == force_use_sort_impl::YES ? "sort" : "hash");
+    test_single_agg(keys,
+                    values,
+                    expected_keys,
+                    expected_values,
+                    cudf::make_sum_wide_aggregation<cudf::groupby_aggregation>(),
+                    use_sort,
+                    null_keys,
+                    cudf::sorted::NO,
+                    {},
+                    {},
+                    cudf::sorted::NO,
+                    test_streaming::NO);
+  }
+}
+}  // namespace
+
+struct GroupBySumWideTest : public cudf::test::BaseFixture {};
+
+TEST_F(GroupBySumWideTest, OverflowCancellationNullsAndSlices)
+{
+  auto constexpr big = std::numeric_limits<int64_t>::max();
+  for (auto const scale :
+       {numeric::scale_type{-2}, numeric::scale_type{0}, numeric::scale_type{2}}) {
+    cudf::test::fixed_width_column_wrapper<int32_t> keys{99, 1, 2, 3, 1, 2, 3, 3, 4, 4, 99};
+    cudf::test::fixed_point_column_wrapper<int64_t> values{
+      {0, big, -big, big, big, -big, big, -big, 7, 8, 0},
+      {true, true, true, true, true, true, true, true, false, false, true},
+      scale};
+    cudf::test::fixed_width_column_wrapper<int32_t> expected_keys{1, 2, 3, 4};
+    cudf::test::fixed_point_column_wrapper<__int128_t> expected{
+      {__int128_t{big} * 2, -__int128_t{big} * 2, big, 0}, {true, true, true, false}, scale};
+    auto const key_slice   = cudf::slice(keys, {1, 10}).front();
+    auto const value_slice = cudf::slice(values, {1, 10}).front();
+    test_sum_wide(key_slice, value_slice, expected_keys, expected);
+  }
+}
+
+TEST_F(GroupBySumWideTest, EmptyAndAllNull)
+{
+  auto const scale = numeric::scale_type{-3};
+  cudf::test::fixed_width_column_wrapper<int32_t> empty_keys{};
+  cudf::test::fixed_point_column_wrapper<int64_t> empty_values{{}, scale};
+  cudf::test::fixed_point_column_wrapper<__int128_t> empty_expected{{}, scale};
+  test_sum_wide(empty_keys, empty_values, empty_keys, empty_expected);
+
+  cudf::test::fixed_width_column_wrapper<int32_t> keys{1, 1};
+  cudf::test::fixed_point_column_wrapper<int64_t> values{{7, 8}, {false, false}, scale};
+  cudf::test::fixed_width_column_wrapper<int32_t> expected_keys{1};
+  cudf::test::fixed_point_column_wrapper<__int128_t> expected{{0}, {false}, scale};
+  test_sum_wide(keys, values, expected_keys, expected);
+}
+
+TEST_F(GroupBySumWideTest, NullKeys)
+{
+  auto const scale = numeric::scale_type{-2};
+  cudf::test::fixed_width_column_wrapper<int32_t> keys{{1, 0, 1, 0}, {true, false, true, false}};
+  cudf::test::fixed_point_column_wrapper<int64_t> values{{2, 3, 4, 5}, scale};
+  cudf::test::fixed_width_column_wrapper<int32_t> included_keys{{1, 0}, {true, false}};
+  cudf::test::fixed_point_column_wrapper<__int128_t> included_values{{6, 8}, scale};
+  test_sum_wide(keys, values, included_keys, included_values, cudf::null_policy::INCLUDE);
+  cudf::test::fixed_width_column_wrapper<int32_t> excluded_keys{{1}, {true}};
+  cudf::test::fixed_point_column_wrapper<__int128_t> excluded_values{{6}, scale};
+  test_sum_wide(keys, values, excluded_keys, excluded_values);
+
+  cudf::test::fixed_width_column_wrapper<int32_t> null_keys{{0, 0, 0, 0},
+                                                            {false, false, false, false}};
+  cudf::test::fixed_width_column_wrapper<int32_t> empty_keys{};
+  cudf::test::fixed_point_column_wrapper<__int128_t> empty_values{{}, scale};
+  test_sum_wide(null_keys, values, empty_keys, empty_values);
+}
+
+TEST_F(GroupBySumWideTest, LargeGroup)
+{
+  auto constexpr big = std::numeric_limits<int64_t>::max();
+  auto const scale   = numeric::scale_type{-2};
+  for (auto const count : {64, 131'072}) {
+    SCOPED_TRACE(count);
+    std::vector<int32_t> host_keys(count, 1);
+    std::vector<int64_t> host_values(count, big);
+    cudf::test::fixed_width_column_wrapper<int32_t> keys(host_keys.begin(), host_keys.end());
+    cudf::test::fixed_point_column_wrapper<int64_t> values(
+      host_values.begin(), host_values.end(), scale);
+    cudf::test::fixed_width_column_wrapper<int32_t> expected_keys{1};
+    cudf::test::fixed_point_column_wrapper<__int128_t> expected{{__int128_t{big} * count}, scale};
+    test_sum_wide(keys, values, expected_keys, expected);
+
+    host_keys.resize(2 * count, 2);
+    host_values.resize(2 * count, big);
+    std::vector<bool> validity(2 * count, false);
+    for (int i = 0; i < count; i += 2) {
+      validity[i] = true;
+    }
+    cudf::test::fixed_width_column_wrapper<int32_t> nullable_keys(host_keys.begin(),
+                                                                  host_keys.end());
+    cudf::test::fixed_point_column_wrapper<int64_t> nullable_values(
+      host_values.begin(), host_values.end(), validity.begin(), scale);
+    cudf::test::fixed_width_column_wrapper<int32_t> nullable_expected_keys{1, 2};
+    cudf::test::fixed_point_column_wrapper<__int128_t> nullable_expected{
+      {__int128_t{big} * (count / 2), 0}, {true, false}, scale};
+    test_sum_wide(nullable_keys, nullable_values, nullable_expected_keys, nullable_expected);
+  }
+}
+
+TEST_F(GroupBySumWideTest, MixedAndDuplicateRequests)
+{
+  cudf::test::fixed_width_column_wrapper<int32_t> keys{1, 1, 1};
+  cudf::test::fixed_point_column_wrapper<int64_t> values{
+    {2, 4, 99}, {true, true, false}, numeric::scale_type{0}};
+  cudf::test::fixed_point_column_wrapper<int64_t> expected_sum{{6}, numeric::scale_type{0}};
+  cudf::test::fixed_point_column_wrapper<__int128_t> expected_wide{{6}, numeric::scale_type{0}};
+  cudf::test::fixed_width_column_wrapper<int32_t> expected_count{2};
+  cudf::test::fixed_point_column_wrapper<int64_t> expected_mean{{3}, numeric::scale_type{0}};
+  for (bool use_sort : {false, true}) {
+    std::vector<cudf::groupby::aggregation_request> requests(3);
+    requests[0].values = values;
+    requests[1].values = values;
+    requests[1].aggregations.push_back(cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+    requests[2].values = values;
+    requests[2].aggregations.push_back(
+      cudf::make_sum_wide_aggregation<cudf::groupby_aggregation>());
+    auto& aggs = requests[0].aggregations;
+    aggs.push_back(cudf::make_sum_wide_aggregation<cudf::groupby_aggregation>());
+    aggs.push_back(cudf::make_sum_aggregation<cudf::groupby_aggregation>());
+    aggs.push_back(
+      cudf::make_count_aggregation<cudf::groupby_aggregation>(cudf::null_policy::EXCLUDE));
+    aggs.push_back(cudf::make_mean_aggregation<cudf::groupby_aggregation>());
+    aggs.push_back(cudf::make_sum_wide_aggregation<cudf::groupby_aggregation>());
+    if (use_sort) {
+      aggs.push_back(cudf::make_nth_element_aggregation<cudf::groupby_aggregation>(0));
+    }
+    cudf::groupby::groupby gb{cudf::table_view{{keys}}};
+    auto [result_keys, results] = gb.aggregate(requests);
+    CUDF_TEST_EXPECT_COLUMNS_EQUIVALENT(expected_wide, *results[0].results[0]);
+    CUDF_TEST_EXPECT_COLUMNS_EQUIVALENT(expected_sum, *results[0].results[1]);
+    CUDF_TEST_EXPECT_COLUMNS_EQUIVALENT(expected_count, *results[0].results[2]);
+    CUDF_TEST_EXPECT_COLUMNS_EQUIVALENT(expected_mean, *results[0].results[3]);
+    CUDF_TEST_EXPECT_COLUMNS_EQUIVALENT(expected_wide, *results[0].results[4]);
+    CUDF_TEST_EXPECT_COLUMNS_EQUIVALENT(expected_sum, *results[1].results[0]);
+    CUDF_TEST_EXPECT_COLUMNS_EQUIVALENT(expected_wide, *results[2].results[0]);
+  }
+}
+
+TEST_F(GroupBySumWideTest, RejectsUnsupportedInputs)
+{
+  cudf::test::fixed_width_column_wrapper<int32_t> keys{1};
+  cudf::test::fixed_width_column_wrapper<int64_t> integers{1};
+  cudf::test::fixed_width_column_wrapper<double> floats{1};
+  cudf::test::fixed_point_column_wrapper<int32_t> decimal32{{1}, numeric::scale_type{0}};
+  cudf::test::fixed_point_column_wrapper<int64_t> decimal64{{1}, numeric::scale_type{0}};
+  cudf::test::fixed_point_column_wrapper<__int128_t> decimal128{{1}, numeric::scale_type{0}};
+  auto dictionary = cudf::dictionary::encode(decimal64);
+  std::vector<cudf::column_view> const unsupported{
+    integers, floats, decimal32, decimal128, dictionary->view()};
+  for (auto const values : unsupported) {
+    for (auto const size : {0, 1}) {
+      for (bool use_sort : {false, true}) {
+        auto const key_slice = cudf::slice(keys, {0, size}).front();
+        std::vector<cudf::groupby::aggregation_request> requests(1);
+        requests[0].values = cudf::slice(values, {0, size}).front();
+        requests[0].aggregations.push_back(
+          cudf::make_sum_wide_aggregation<cudf::groupby_aggregation>());
+        if (use_sort) {
+          requests[0].aggregations.push_back(
+            cudf::make_nth_element_aggregation<cudf::groupby_aggregation>(0));
+        }
+        cudf::groupby::groupby gb{cudf::table_view{{key_slice}}};
+        EXPECT_THROW(gb.aggregate(requests), cudf::logic_error);
+      }
+    }
   }
 }
 

@@ -201,6 +201,10 @@ void verify_valid_requests(std::span<RequestType const> requests)
       [](auto const& request) {
         return std::all_of(
           request.aggregations.begin(), request.aggregations.end(), [&request](auto const& agg) {
+            if (agg->kind == aggregation::SUM_WIDE &&
+                cudf::is_dictionary(request.values.type())) {
+              return false;
+            }
             auto values_type = cudf::is_dictionary(request.values.type())
                                  ? cudf::dictionary_column_view(request.values).keys().type()
                                  : request.values.type();

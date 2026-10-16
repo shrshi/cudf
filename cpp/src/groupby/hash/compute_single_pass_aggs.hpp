@@ -30,6 +30,8 @@ constexpr bool is_reduction_supported(aggregation::Kind kind)
 {
   switch (kind) {
     case aggregation::SUM: return cudf::detail::is_valid_aggregation<T, aggregation::SUM>();
+    case aggregation::SUM_WIDE:
+      return cudf::detail::is_valid_aggregation<T, aggregation::SUM_WIDE>();
     case aggregation::PRODUCT: return cudf::detail::is_valid_aggregation<T, aggregation::PRODUCT>();
     case aggregation::SUM_OF_SQUARES:
       return cudf::detail::is_valid_aggregation<T, aggregation::SUM_OF_SQUARES>();

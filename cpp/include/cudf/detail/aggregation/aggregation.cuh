@@ -65,6 +65,10 @@ struct corresponding_operator<aggregation::SUM> {
   using type = DeviceSum;
 };
 template <>
+struct corresponding_operator<aggregation::SUM_WIDE> {
+  using type = DeviceSum;
+};
+template <>
 struct corresponding_operator<aggregation::SUM_OVERFLOW> {
   using type = DeviceSum;
 };

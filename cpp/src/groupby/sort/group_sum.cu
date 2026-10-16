@@ -32,6 +32,21 @@ std::unique_ptr<column> group_sum(column_view const& values,
                          mr);
 }
 
+std::unique_ptr<column> group_sum_wide(column_view const& values,
+                                       size_type num_groups,
+                                       cudf::device_span<size_type const> group_labels,
+                                       cuda::stream_ref stream,
+                                       rmm::device_async_resource_ref mr)
+{
+  return type_dispatcher(values.type(),
+                         group_reduction_dispatcher<aggregation::SUM_WIDE>{},
+                         values,
+                         num_groups,
+                         group_labels,
+                         stream,
+                         mr);
+}
+
 }  // namespace detail
 }  // namespace groupby
 }  // namespace cudf

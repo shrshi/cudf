@@ -1177,6 +1177,15 @@ TEST_F(StreamingGroupbyTest, StdBasic)
   verify_against_groupby(keys, results, {batch1, batch2}, KEY_COL, reqs);
 }
 
+TEST_F(StreamingGroupbyTest, SumWideUnsupported)
+{
+  EXPECT_FALSE(cudf::groupby::is_streaming_groupby_supported(
+    cudf::data_type{cudf::type_id::DECIMAL64, -2}, cudf::aggregation::SUM_WIDE));
+  auto reqs = single_agg_req(1, cudf::make_sum_wide_aggregation<cudf::groupby_aggregation>());
+  EXPECT_THROW(cudf::groupby::streaming_groupby(KEY_COL, reqs, DEFAULT_MAX_DISTINCT_KEYS),
+               std::invalid_argument);
+}
+
 TEST_F(StreamingGroupbyTest, UnsupportedAggThrows)
 {
   auto reqs = single_agg_req(1, cudf::make_collect_list_aggregation<cudf::groupby_aggregation>());

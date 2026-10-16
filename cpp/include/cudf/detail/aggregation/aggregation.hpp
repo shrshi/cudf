@@ -79,6 +79,15 @@ class sum_aggregation final
 };
 
 /**
+ * @brief Derived class for specifying a widened Decimal64 grouped sum
+ */
+class sum_wide_aggregation final
+  : public clonable<sum_wide_aggregation>::derived_from<groupby_aggregation> {
+ public:
+  sum_wide_aggregation() : aggregation(SUM_WIDE) {}
+};
+
+/**
  * @brief Derived class for specifying a sum_overflow aggregation
  */
 class sum_overflow_aggregation final
@@ -916,6 +925,11 @@ struct target_type_impl<
   using type = Source;
 };
 
+template <>
+struct target_type_impl<numeric::decimal64, aggregation::SUM_WIDE> {
+  using type = numeric::decimal128;
+};
+
 // Summing/Multiplying float/doubles, use same type accumulator
 template <typename Source, aggregation::Kind k>
   requires(std::is_floating_point_v<Source> && is_sum_product_agg(k))
@@ -1150,6 +1164,8 @@ CUDF_HOST_DEVICE inline decltype(auto) aggregation_dispatcher(aggregation::Kind 
   switch (k) {
     case aggregation::SUM:
       return f.template operator()<aggregation::SUM>(std::forward<Ts>(args)...);
+    case aggregation::SUM_WIDE:
+      return f.template operator()<aggregation::SUM_WIDE>(std::forward<Ts>(args)...);
     case aggregation::SUM_OVERFLOW:
       return f.template operator()<aggregation::SUM_OVERFLOW>(std::forward<Ts>(args)...);
     case aggregation::PRODUCT:

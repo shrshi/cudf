@@ -301,6 +301,8 @@ struct fused_minmax_sum_fn {
 template std::unique_ptr<column> compute_reduction<aggregation::SUM>(reduction_context const& ctx,
                                                                      cuda::stream_ref stream,
                                                                      cudf::memory_resources mr);
+template std::unique_ptr<column> compute_reduction<aggregation::SUM_WIDE>(
+  reduction_context const& ctx, cuda::stream_ref stream, cudf::memory_resources mr);
 template std::unique_ptr<column> compute_reduction<aggregation::SUM_OF_SQUARES>(
   reduction_context const& ctx, cuda::stream_ref stream, cudf::memory_resources mr);
 

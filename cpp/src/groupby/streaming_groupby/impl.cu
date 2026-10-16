@@ -84,6 +84,9 @@ void validate_requests(host_span<streaming_aggregation_request const> requests)
     CUDF_EXPECTS(req.aggregation != nullptr,
                  "streaming_aggregation_request must have a non-null aggregation.",
                  std::invalid_argument);
+    CUDF_EXPECTS(req.aggregation->kind != aggregation::SUM_WIDE,
+                 "SUM_WIDE is not supported by streaming groupby.",
+                 std::invalid_argument);
     CUDF_EXPECTS(detail::is_hash_aggregation(req.aggregation->kind) &&
                    req.aggregation->kind != aggregation::ARGMIN &&
                    req.aggregation->kind != aggregation::ARGMAX,

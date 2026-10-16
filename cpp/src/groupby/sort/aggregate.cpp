@@ -141,6 +141,18 @@ void aggregate_result_functor::operator()<aggregation::SUM>(aggregation const& a
 }
 
 template <>
+void aggregate_result_functor::operator()<aggregation::SUM_WIDE>(aggregation const& agg)
+{
+  if (cache.has_result(values, agg)) return;
+
+  cache.add_result(
+    values,
+    agg,
+    detail::group_sum_wide(
+      get_grouped_values(), helper.num_groups(stream), helper.group_labels(stream), stream, mr));
+}
+
+template <>
 void aggregate_result_functor::operator()<aggregation::SUM_OVERFLOW>(aggregation const& agg)
 {
   if (cache.has_result(values, agg)) return;

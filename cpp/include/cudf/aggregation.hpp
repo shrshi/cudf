@@ -118,6 +118,7 @@ class aggregation {
     MERGE_HISTOGRAM,  ///< merge partial values of HISTOGRAM aggregation
     BITWISE_AGG,      ///< bitwise aggregation on numeric columns
     TOP_K,            ///< top k elements in a group
+    SUM_WIDE,         ///< Decimal64 sum with Decimal128 accumulation and output
     INVALID           ///< invalid aggregation, used as a placeholder when default-constructed
   };
 
@@ -211,6 +212,20 @@ enum class ewm_history : int32_t { INFINITE, FINITE };
 /// @return A SUM aggregation object
 template <typename Base = aggregation>
 std::unique_ptr<Base> make_sum_aggregation();
+
+/**
+ * @brief Creates a grouped sum aggregation that widens Decimal64 values to Decimal128.
+ *
+ * Supports only Decimal64 columns in ordinary groupby aggregation. Values are widened during
+ * accumulation without materializing a Decimal128 input column. The result is Decimal128 with
+ * the input scale. Null values are excluded and groups with no valid values return null.
+ * Dictionary columns and streaming groupby are not supported. Ordinary SUM is unchanged.
+ *
+ * @tparam Base Either `aggregation` or `groupby_aggregation`
+ * @return A SUM_WIDE aggregation object
+ */
+template <typename Base = groupby_aggregation>
+std::unique_ptr<Base> make_sum_wide_aggregation();
 
 /// Factory to create a SUM_OVERFLOW aggregation
 /// @return A SUM_OVERFLOW aggregation object
