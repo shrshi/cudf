@@ -214,6 +214,16 @@ class expression_parser {
    */
   [[nodiscard]] bool has_nulls() const { return _has_nulls; }
 
+  /**
+   * @brief Get the data references in the expression: its columns, literals, and intermediates.
+   *
+   * @return The data references in the expression
+   */
+  [[nodiscard]] std::vector<device_data_reference> const& data_references() const
+  {
+    return _data_references;
+  }
+
   expression_device_view device_expression_data;  ///< The collection of data required to evaluate
                                                   ///< the expression on the device.
   int shmem_per_thread;

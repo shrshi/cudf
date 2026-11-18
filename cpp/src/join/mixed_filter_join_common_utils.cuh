@@ -12,6 +12,8 @@
 #include <rmm/mr/polymorphic_allocator.hpp>
 
 #include <cuco/static_set.cuh>
+#include <cuda/std/cmath>
+#include <cuda/std/concepts>
 
 #include <cstddef>
 
@@ -56,11 +58,39 @@ struct single_expression_equality : expression_equality<has_nulls> {
 };
 
 /**
- * @brief Equality comparator that composes two row_equality comparators.
+ * @brief Equality comparator functor that evaluates physical values as equal only if an
+ * expression cannot tell them apart.
+ *
+ * It evaluates `NaN` as equal to other `NaN`s, and `+0.0` as unequal to `-0.0`, which an
+ * expression such as `1.0 / x` tells apart.
+ */
+struct signbit_aware_physical_equality_comparator {
+  template <typename Element>
+  __device__ constexpr bool operator()(Element const lhs, Element const rhs) const noexcept
+  {
+    return lhs == rhs;
+  }
+
+  template <cuda::std::floating_point Element>
+  __device__ constexpr bool operator()(Element const lhs, Element const rhs) const noexcept
+  {
+    return (cuda::std::isnan(lhs) and cuda::std::isnan(rhs)) or
+           (lhs == rhs and cuda::std::signbit(lhs) == cuda::std::signbit(rhs));
+  }
+};
+
+using conditional_row_equality = cudf::detail::row::equality::strong_index_comparator_adapter<
+  cudf::detail::row::equality::device_row_comparator<false,
+                                                     cudf::nullate::DYNAMIC,
+                                                     signbit_aware_physical_equality_comparator>>;
+
+/**
+ * @brief Equality comparator that composes the row equality comparators of the equality and
+ * conditional tables.
  */
 struct double_row_equality_comparator {
   row_equality const equality_comparator;
-  row_equality const conditional_comparator;
+  conditional_row_equality const conditional_comparator;
 
   __device__ bool operator()(size_type lhs_row_index, size_type rhs_row_index) const noexcept
   {

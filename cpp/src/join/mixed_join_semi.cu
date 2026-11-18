@@ -15,6 +15,7 @@
 #include <cudf/detail/null_mask.hpp>
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/detail/utilities/grid_1d.cuh>
+#include <cudf/dictionary/dictionary_column_view.hpp>
 #include <cudf/join/join.hpp>
 #include <cudf/join/mixed_join.hpp>
 #include <cudf/table/table_device_view.cuh>
@@ -30,7 +31,10 @@
 #include <cuda/std/iterator>
 #include <cuda/stream>
 
+#include <algorithm>
+#include <iterator>
 #include <optional>
+#include <vector>
 
 namespace cudf {
 namespace detail {
@@ -127,24 +131,47 @@ std::unique_ptr<rmm::device_uvector<size_type>> mixed_join_semi(
   // insertion must account for both sets of tables. An alternative solution
   // would be to use a multimap, but that solution would store duplicates where
   // equality and conditional rows are equal, so this approach is preferable.
-  // One way to make this solution even more efficient would be to only include
-  // the columns of the conditional table that are used by the expression, but
-  // that requires additional plumbing through the AST machinery and is out of
-  // scope for now.
+  // Only the conditional columns that the expression references are compared,
+  // since the others cannot change its result. This also leaves out unreferenced
+  // nested columns, which this comparator does not support.
   auto const row_comparator_right =
     cudf::detail::row::equality::two_table_comparator{preprocessed_right, preprocessed_right};
   auto const equality_right_equality =
     row_comparator_right.equal_to<false>(right_nulls, compare_nulls);
+  // The expression reads the indices of dictionary columns, so compare those rather than the keys,
+  // which need not be unique.
+  std::vector<column_view> right_conditional_columns;
+  std::transform(right_conditional.begin(),
+                 right_conditional.end(),
+                 std::back_inserter(right_conditional_columns),
+                 [](column_view const& column) {
+                   return column.type().id() == type_id::DICTIONARY32
+                            ? dictionary_column_view{column}.get_indices_annotated()
+                            : column;
+                 });
+  auto const right_conditional_as_read = table_view{right_conditional_columns};
+  std::vector<size_type> referenced_right_columns;
+  for (auto const& reference : parser.data_references()) {
+    if (reference.reference_type == ast::detail::device_data_reference_type::COLUMN and
+        reference.table_source == ast::table_reference::RIGHT) {
+      referenced_right_columns.push_back(reference.data_index);
+    }
+  }
+  auto const referenced_right_conditional =
+    right_conditional_as_read.select(referenced_right_columns);
   auto const preprocessed_right_condtional =
-    cudf::detail::row::equality::preprocessed_table::create(right_conditional, stream, temp_mr);
+    cudf::detail::row::equality::preprocessed_table::create(
+      referenced_right_conditional, stream, temp_mr);
   auto const row_comparator_conditional_right = cudf::detail::row::equality::two_table_comparator{
     preprocessed_right_condtional, preprocessed_right_condtional};
-  auto const right_conditional_nulls = cudf::nullate::DYNAMIC{cudf::has_nulls(right_conditional)};
+  auto const right_conditional_nulls =
+    cudf::nullate::DYNAMIC{cudf::has_nulls(referenced_right_conditional)};
   // `compare_nulls` governs the equality tables. This comparator only deduplicates identical
   // right conditional rows, so it must remain reflexive when those rows contain nulls. Treating
   // nulls as unequal would insert every otherwise identical null row into the linear-probing set.
-  auto const equality_right_conditional =
-    row_comparator_conditional_right.equal_to<false>(right_conditional_nulls, null_equality::EQUAL);
+  // It must also keep apart values that the expression can tell apart, such as `+0.0` and `-0.0`.
+  auto const equality_right_conditional = row_comparator_conditional_right.equal_to<false>(
+    right_conditional_nulls, null_equality::EQUAL, signbit_aware_physical_equality_comparator{});
 
   hash_set_type row_set{{static_cast<std::size_t>(right.num_rows())},
                         cudf::detail::CUCO_DESIRED_LOAD_FACTOR,
