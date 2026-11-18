@@ -143,8 +143,9 @@ std::unique_ptr<rmm::device_uvector<size_type>> mixed_join_semi(
   // `compare_nulls` governs the equality tables. This comparator only deduplicates identical
   // right conditional rows, so it must remain reflexive when those rows contain nulls. Treating
   // nulls as unequal would insert every otherwise identical null row into the linear-probing set.
-  auto const equality_right_conditional =
-    row_comparator_conditional_right.equal_to<false>(right_conditional_nulls, null_equality::EQUAL);
+  // It must also keep apart values that the expression can tell apart, such as `+0.0` and `-0.0`.
+  auto const equality_right_conditional = row_comparator_conditional_right.equal_to<false>(
+    right_conditional_nulls, null_equality::EQUAL, signbit_aware_physical_equality_comparator{});
 
   hash_set_type row_set{{static_cast<std::size_t>(right.num_rows())},
                         cudf::detail::CUCO_DESIRED_LOAD_FACTOR,

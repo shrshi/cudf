@@ -1915,7 +1915,18 @@ TYPED_TEST(MixedLeftSemiJoinTest, BasicNullEqualityUnequal)
                    cudf::null_equality::UNEQUAL);
 };
 
-struct MixedLeftSemiAndAntiJoinTest : public cudf::test::BaseFixture {};
+struct MixedLeftSemiAndAntiJoinTest : public cudf::test::BaseFixture {
+  static void expect_sorted_indices(SingleJoinReturn const& result,
+                                    std::vector<cudf::size_type> const& expected_indices)
+  {
+    auto actual_indices = std::vector<cudf::size_type>(result->size());
+    for (std::size_t i = 0; i < result->size(); ++i) {
+      actual_indices[i] = result->element(i, cudf::get_default_stream());
+    }
+    std::sort(actual_indices.begin(), actual_indices.end());
+    EXPECT_EQ(actual_indices, expected_indices);
+  }
+};
 
 TEST_F(MixedLeftSemiAndAntiJoinTest, NullableConditionalWithNonNullableEqualityKeys)
 {
@@ -2019,6 +2030,37 @@ TEST_F(MixedLeftSemiAndAntiJoinTest, NullableConditionalWithNonNullableEqualityK
       }
     }
   }
+}
+
+TEST_F(MixedLeftSemiAndAntiJoinTest, SignedZeroConditionalColumns)
+{
+  // The right rows have the same key and conditional values that compare equal, but the
+  // expression tells them apart: 1.0 / +0.0 is +inf and 1.0 / -0.0 is -inf.
+  auto constexpr inf = std::numeric_limits<double>::infinity();
+  cudf::test::fixed_width_column_wrapper<int32_t> left_keys{0, 0};
+  cudf::test::fixed_width_column_wrapper<double> left_values{inf, -inf};
+  cudf::test::fixed_width_column_wrapper<int32_t> right_keys{0, 0};
+  cudf::test::fixed_width_column_wrapper<double> right_values{0.0, -0.0};
+  auto const left_table  = cudf::table_view{{left_keys, left_values}};
+  auto const right_table = cudf::table_view{{right_keys, right_values}};
+
+  auto one               = cudf::numeric_scalar<double>(1.0);
+  auto const one_literal = cudf::ast::literal(one);
+  auto const left_value  = cudf::ast::column_reference(1, cudf::ast::table_reference::LEFT);
+  auto const right_value = cudf::ast::column_reference(1, cudf::ast::table_reference::RIGHT);
+  auto const one_over_right =
+    cudf::ast::operation(cudf::ast::ast_operator::DIV, one_literal, right_value);
+  auto const predicate =
+    cudf::ast::operation(cudf::ast::ast_operator::EQUAL, left_value, one_over_right);
+
+  expect_sorted_indices(
+    cudf::mixed_left_semi_join(
+      left_table.select({0}), right_table.select({0}), left_table, right_table, predicate),
+    {0, 1});
+  expect_sorted_indices(
+    cudf::mixed_left_anti_join(
+      left_table.select({0}), right_table.select({0}), left_table, right_table, predicate),
+    {});
 }
 
 TYPED_TEST(MixedLeftSemiJoinTest, AsymmetricEquality)
