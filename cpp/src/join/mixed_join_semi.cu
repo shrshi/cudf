@@ -15,6 +15,7 @@
 #include <cudf/detail/null_mask.hpp>
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/detail/utilities/grid_1d.cuh>
+#include <cudf/dictionary/dictionary_column_view.hpp>
 #include <cudf/join/join.hpp>
 #include <cudf/join/mixed_join.hpp>
 #include <cudf/table/table_device_view.cuh>
@@ -30,7 +31,10 @@
 #include <cuda/std/iterator>
 #include <cuda/stream>
 
+#include <algorithm>
+#include <iterator>
 #include <optional>
+#include <vector>
 
 namespace cudf {
 namespace detail {
@@ -135,8 +139,21 @@ std::unique_ptr<rmm::device_uvector<size_type>> mixed_join_semi(
     cudf::detail::row::equality::two_table_comparator{preprocessed_right, preprocessed_right};
   auto const equality_right_equality =
     row_comparator_right.equal_to<false>(right_nulls, compare_nulls);
+  // The expression reads the indices of dictionary columns, so compare those rather than the keys,
+  // which need not be unique.
+  std::vector<column_view> right_conditional_columns;
+  std::transform(right_conditional.begin(),
+                 right_conditional.end(),
+                 std::back_inserter(right_conditional_columns),
+                 [](column_view const& column) {
+                   return column.type().id() == type_id::DICTIONARY32
+                            ? dictionary_column_view{column}.get_indices_annotated()
+                            : column;
+                 });
+  auto const right_conditional_as_read = table_view{right_conditional_columns};
   auto const preprocessed_right_condtional =
-    cudf::detail::row::equality::preprocessed_table::create(right_conditional, stream, temp_mr);
+    cudf::detail::row::equality::preprocessed_table::create(
+      right_conditional_as_read, stream, temp_mr);
   auto const row_comparator_conditional_right = cudf::detail::row::equality::two_table_comparator{
     preprocessed_right_condtional, preprocessed_right_condtional};
   auto const right_conditional_nulls = cudf::nullate::DYNAMIC{cudf::has_nulls(right_conditional)};

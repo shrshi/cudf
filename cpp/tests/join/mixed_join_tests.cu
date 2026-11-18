@@ -12,6 +12,7 @@
 #include <cudf/ast/expressions.hpp>
 #include <cudf/ast/jit/udf.hpp>
 #include <cudf/column/column_view.hpp>
+#include <cudf/dictionary/dictionary_factories.hpp>
 #include <cudf/errc.hpp>
 #include <cudf/join/conditional_join.hpp>
 #include <cudf/join/hash_join.hpp>
@@ -2061,6 +2062,28 @@ TEST_F(MixedLeftSemiAndAntiJoinTest, SignedZeroConditionalColumns)
     cudf::mixed_left_anti_join(
       left_table.select({0}), right_table.select({0}), left_table, right_table, predicate),
     {});
+}
+
+TEST_F(MixedLeftSemiAndAntiJoinTest, DictionaryConditionalColumnsWithDuplicateKeys)
+{
+  // The rows have the same equality key and the same dictionary key, but different dictionary
+  // indices, which are what the expression compares.
+  cudf::test::fixed_width_column_wrapper<int32_t> equality_keys{0, 0};
+  cudf::test::fixed_width_column_wrapper<int32_t> dictionary_keys{7, 7};
+  cudf::test::fixed_width_column_wrapper<int32_t> dictionary_indices{0, 1};
+  auto const dictionary  = cudf::make_dictionary_column(dictionary_keys, dictionary_indices);
+  auto const equality    = cudf::table_view{{equality_keys}};
+  auto const conditional = cudf::table_view{{dictionary->view()}};
+
+  auto const left_value  = cudf::ast::column_reference(0, cudf::ast::table_reference::LEFT);
+  auto const right_value = cudf::ast::column_reference(0, cudf::ast::table_reference::RIGHT);
+  auto const predicate =
+    cudf::ast::operation(cudf::ast::ast_operator::EQUAL, left_value, right_value);
+
+  expect_sorted_indices(
+    cudf::mixed_left_semi_join(equality, equality, conditional, conditional, predicate), {0, 1});
+  expect_sorted_indices(
+    cudf::mixed_left_anti_join(equality, equality, conditional, conditional, predicate), {});
 }
 
 TYPED_TEST(MixedLeftSemiJoinTest, AsymmetricEquality)
