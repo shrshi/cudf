@@ -2086,6 +2086,45 @@ TEST_F(MixedLeftSemiAndAntiJoinTest, DictionaryConditionalColumnsWithDuplicateKe
     cudf::mixed_left_anti_join(equality, equality, conditional, conditional, predicate), {});
 }
 
+TEST_F(MixedLeftSemiAndAntiJoinTest, UnreferencedNestedConditionalColumns)
+{
+  // Right rows 0 and 1, and rows 2 and 3, have the same keys and the same values in the
+  // referenced column. Deduplicating them must not compare their struct and list columns.
+  cudf::test::fixed_width_column_wrapper<int32_t> left_keys{0, 1, 2};
+  cudf::test::fixed_width_column_wrapper<int32_t> left_values{6, 6, 6};
+  cudf::test::fixed_width_column_wrapper<int32_t> right_keys{0, 0, 1, 1};
+  cudf::test::fixed_width_column_wrapper<int32_t> right_values{5, 5, 7, 7};
+  cudf::test::fixed_width_column_wrapper<int32_t> struct_child{1, 2, 3, 4};
+  cudf::test::structs_column_wrapper right_structs{{struct_child}};
+  cudf::test::lists_column_wrapper<int32_t> right_lists{{1}, {2, 3}, {}, {4}};
+  auto const left_table  = cudf::table_view{{left_keys, left_values}};
+  auto const right_table = cudf::table_view{{right_keys, right_values, right_structs, right_lists}};
+
+  auto const left_value   = cudf::ast::column_reference(1, cudf::ast::table_reference::LEFT);
+  auto const right_value  = cudf::ast::column_reference(1, cudf::ast::table_reference::RIGHT);
+  auto five               = cudf::numeric_scalar<int32_t>(5);
+  auto const five_literal = cudf::ast::literal(five);
+  auto const left_less_than_right =
+    cudf::ast::operation(cudf::ast::ast_operator::LESS, left_value, right_value);
+  // References no column of the right table.
+  auto const left_greater_than_five =
+    cudf::ast::operation(cudf::ast::ast_operator::GREATER, left_value, five_literal);
+
+  auto const semi = [&](cudf::ast::expression const& predicate) {
+    return cudf::mixed_left_semi_join(
+      left_table.select({0}), right_table.select({0}), left_table, right_table, predicate);
+  };
+  auto const anti = [&](cudf::ast::expression const& predicate) {
+    return cudf::mixed_left_anti_join(
+      left_table.select({0}), right_table.select({0}), left_table, right_table, predicate);
+  };
+
+  expect_sorted_indices(semi(left_less_than_right), {1});
+  expect_sorted_indices(anti(left_less_than_right), {0, 2});
+  expect_sorted_indices(semi(left_greater_than_five), {0, 1});
+  expect_sorted_indices(anti(left_greater_than_five), {2});
+}
+
 TYPED_TEST(MixedLeftSemiJoinTest, AsymmetricEquality)
 {
   this->test({{0, 2, 1}, {3, 5, 4}, {10, 30, 20}},
